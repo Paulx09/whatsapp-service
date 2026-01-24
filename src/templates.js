@@ -17,7 +17,7 @@ A continuación, te contamos los principales beneficios que obtendrás con este 
 Escríbenos y comencemos a trabajar en tu web 🚀
 
 `,
-        image: "imagenes/desarrollo_web/1-1.png",
+        image: "imagenes/desarrollo_web/1-1-v2.png",
       },
       2: {
         text: `Hola {nombre} 👋
@@ -25,7 +25,7 @@ En DIGIMEDIA diseñamos y desarrollamos sitios web pensados para generar confian
 👉 Escríbenos y te ayudamos con tu desarrollo web
 
 `,
-        image: "imagenes/desarrollo_web/1-2.png",
+        image: "imagenes/desarrollo_web/1-2-v2.png",
       },
       3: {
         text: `Hola {nombre} 👋
@@ -37,7 +37,7 @@ En DIGIMEDIA trabajamos tu web para que se vea profesional, genere confianza y a
 
 .👉 Escríbenos para más información
 `,
-        image: "imagenes/desarrollo_web/1-3.png",
+        image: "imagenes/desarrollo_web/1-3-v2.png",
       }
     }
   },
@@ -55,20 +55,20 @@ Gracias por contactarnos. Soy de DIGIMEDIA 🚀
 Escríbenos y comencemos a trabajar tus redes sociales 🚀 
 
 `,
-        image: "imagenes/gestion_redes/2-1.png",
+        image: "imagenes/gestion_redes/2-1-v2.png",
       },
       2: {
         text: `Hola {nombre} 👋
 En DIGIMEDIA ayudamos a marcas como la tuya a usar las redes sociales para atraer clientes y crecer. 🚀
 👉 Escríbenos y te ayudamos con tus redes sociales`,
-        image: "imagenes/gestion_redes/2-2.png",
+        image: "imagenes/gestion_redes/2-2-v2.png",
       },
       3: {
         text: `Hola {nombre} 😊
 En DIGIMEDIA trabajamos tus redes sociales con enfoque estratégico para que generen resultados reales 🚀
  ✅ 👉 Escríbenos para más información
 `,
-        image: "imagenes/gestion_redes/2-3.png",
+        image: "imagenes/gestion_redes/2-3-v2.png",
       }
     }
   },
@@ -86,14 +86,14 @@ A continuación, te contamos los principales beneficios que obtendrás con este 
 ✅ Tomarás mejores decisiones usando datos y métricas reales.
 Escríbenos y comencemos a impulsar tu crecimiento digital 🚀
  `,
-        image: "imagenes/marketing_digital/3-1.png",
+        image: "imagenes/marketing_digital/3-1-v2.png",
       },
       2: {
         text: `Hola {nombre} 👋
 En DIGIMEDIA definimos y gestionamos estrategias digitales para que tus acciones tengan dirección, generen clientes y se basen en datos reales. 🚀
 👉 Escríbenos y te ayudamos con tu conexión digital
 `,
-        image: "imagenes/marketing_digital/3-2.png",
+        image: "imagenes/marketing_digital/3-2-v2.png",
       },
       3: {
         text: `Hola {nombre} 👋
@@ -104,7 +104,7 @@ En DIGIMEDIA trabajamos tu marketing digital con estrategia y datos para lograr 
  ✅ Dirección y orden para que tu marketing sí funcione.
 .👉 Escríbenos para más información
 `,
-        image: "imagenes/marketing_digital/3-3.png",
+        image: "imagenes/marketing_digital/3-3-v2.png",
       }
     }
   },
@@ -123,14 +123,14 @@ A continuación, te contamos los principales beneficios que obtendrás con este 
 Escríbenos y comencemos a construir una marca sólida 🚀
 
 `,
-        image: "imagenes/branding_diseño/4-1.png",
+        image: "imagenes/branding_diseño/4-1-v2.png",
       },
       2: {
         text: ` Hola {nombre} 👋
 En DIGIMEDIA trabajamos la identidad de tu marca para que se vea profesional, comunique con claridad y genere confianza desde el primer contacto. 🚀
 👉 Escríbenos y te ayudamos con tu marca
 `,
-        image: "imagenes/branding_diseño/4-2.png",
+        image: "imagenes/branding_diseño/4-2-v2.png",
       },
       3: {
         text: `Hola {nombre} 👋
@@ -141,7 +141,7 @@ En DIGIMEDIA trabajamos tu marca para que se vea profesional, comunique con clar
  ✅ Resultados medibles con una marca coherente y sólida.
 .👉 Escríbenos para más información
 `,
-        image: "imagenes/branding_diseño/4-3.png",
+        image: "imagenes/branding_diseño/4-3-v2.png",
       }
     }
   },

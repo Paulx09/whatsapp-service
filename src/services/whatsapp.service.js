@@ -139,15 +139,46 @@ export async function startWhatsAppBot() {
   // 🔹 Ahora sí registramos los eventos
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
-    if (!msg.message?.conversation) return;
+    
+    // Debug: Ver todos los mensajes que llegan
+    console.log('📩 Mensaje recibido:', {
+      de: msg.key.remoteJid,
+      esDeYo: msg.key.fromMe,
+      tipo: msg.message ? Object.keys(msg.message)[0] : 'sin tipo',
+      texto: msg.message?.conversation || msg.message?.extendedTextMessage?.text || 'sin texto'
+    });
+    
+    // Ignorar mensajes enviados por nosotros mismos
+    if (msg.key.fromMe) {
+      console.log('⏭️ Ignorando mensaje propio');
+      return;
+    }
+    
+    // Extraer texto del mensaje (puede venir en diferentes formatos)
+    const text = msg.message?.conversation || 
+                 msg.message?.extendedTextMessage?.text || 
+                 msg.message?.imageMessage?.caption ||
+                 null;
+    
+    if (!text) {
+      console.log('⚠️ Mensaje sin texto, ignorando');
+      return;
+    }
 
     const userId = msg.key.remoteJid;
-    const text = msg.message.conversation;
+
+    console.log('🤖 Procesando chatbot para:', userId, 'texto:', text);
 
     const response = handleIncomingMessage(userId, text);
 
     if (response) {
-      await sock.sendMessage(userId, { text: response });
+      console.log('📤 Enviando respuesta:', response.substring(0, 50) + '...');
+      try {
+        await sock.sendMessage(userId, { text: response });
+        console.log('✅ Respuesta enviada correctamente');
+      } catch (error) {
+        console.error('❌ Error enviando respuesta:', error.message);
+      }
     }
   });
 
@@ -747,7 +778,7 @@ export default {
     return getQRStatus();
   },
 
-  async sendMessage({ telefono, templateOption, nombre, fecha, hora, id_servicio }) {
+  async sendMessage({ telefono, templateOption, nombre, fecha = null, hora = null, id_servicio }) {
     if (!connectionState.socket?.user) {
       throw new Error("No conectado a WhatsApp. Por favor, escanea el código QR primero.");
     }

@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 
 export async function sendMessage(req, res) {
   try {
-const { nombre, templateOption, telefono, fecha, hora, id_servicio} = req.body;
+const { nombre, templateOption, telefono, fecha = null, hora = null, id_servicio} = req.body;
 
       const result = await whatsappService.sendMessage({
       nombre,

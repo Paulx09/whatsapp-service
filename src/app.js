@@ -8,6 +8,7 @@ import messageRoutes from './routes/message.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import jwt from 'jsonwebtoken';
 import whatsappService, {startWhatsAppBot} from './services/whatsapp.service.js';
+import sessionManager from './services/session.manager.js';
 import 'dotenv/config';
 import path from "path";
 import { fileURLToPath } from "url";
@@ -130,6 +131,39 @@ export function emitQrStatusUpdate(status) {
 export function emitQrStatusToUser(userId, status) {
   io.to(`user-${userId}`).emit('qr-status-update', status);
 }
+
+// Intentar auto-refresh de sesión al iniciar el servidor (no bloqueante)
+const reconnectCallback = () => {
+  return new Promise(async (resolve, reject) => {
+    try {
+      // Llamada al start que crea la sesión
+      await startWhatsAppBot();
+    } catch (err) {
+      // startWhatsAppBot puede lanzar; igualmente intentamos observar el estado
+    }
+
+    const timeout = parseInt(process.env.RECONNECT_TIMEOUT || '30000', 10);
+    const start = Date.now();
+    const interval = 1000;
+
+    const checker = setInterval(() => {
+      try {
+        const status = whatsappService.getQRStatus();
+        if (status.isConnected) {
+          clearInterval(checker);
+          resolve(status);
+        } else if (Date.now() - start > timeout) {
+          clearInterval(checker);
+          reject(new Error('TIMEOUT_WAIT_CONNECTED'));
+        }
+      } catch (e) {
+        // ignorar y seguir esperando
+      }
+    }, interval);
+  });
+};
+
+sessionManager.runOnStartup(reconnectCallback);
 
 // Manejo de errores global
 app.use((err, req, res, next) => {

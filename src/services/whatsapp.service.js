@@ -1,4 +1,5 @@
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason } from '@whiskeysockets/baileys';
+import { Boom } from '@hapi/boom';
 import QRCode from 'qrcode';
 //import { getTemplate, getTemplateMessage } from '../templates.js';
 import { getTemplate } from '../templates.js';
@@ -188,6 +189,30 @@ export async function startWhatsAppBot() {
   logger.info("✅ WhatsApp Bot iniciado y escuchando mensajes...");
 }
 
+// Función para limpiar la carpeta auth_info cuando el usuario cierra sesión desde WhatsApp
+async function cleanupAuthInfo() {
+  try {
+    const authPath = path.resolve(process.cwd(), 'auth_info');
+    
+    if (fs.existsSync(authPath)) {
+      // Eliminar todos los archivos dentro de auth_info
+      const files = fs.readdirSync(authPath);
+      for (const file of files) {
+        const filePath = path.join(authPath, file);
+        if (fs.statSync(filePath).isFile()) {
+          fs.unlinkSync(filePath);
+          logger.info('Deleted auth file', { file });
+        }
+      }
+      logger.info('auth_info folder cleaned successfully');
+      return true;
+    }
+    return false;
+  } catch (error) {
+    logger.error('Error cleaning auth_info', { error: error.message, stack: error.stack });
+    return false;
+  }
+}
 
 // Función para limpiar completamente el estado
 async function cleanupConnection() {
@@ -456,7 +481,7 @@ async function createNewSession() {
     sock.ev.on('creds.update', saveCreds);
 
     // Configurar event handlers para mejor manejo de conexión
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
       try {
         logger.info('Connection update', {
           connection: update.connection,
@@ -484,19 +509,51 @@ async function createNewSession() {
             logger.error('Error emitting connection status', { error: emitError.message });
           }
         } else if (update.connection === 'close') {
+          const lastDisconnect = update.lastDisconnect;
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          
           connectionState.connectionStatus = 'disconnected';
           connectionState.isConnecting = false;
 
           logger.warn('Connection closed', {
-            reason: update.lastDisconnect?.error?.message || 'unknown',
-            statusCode: update.lastDisconnect?.statusCode
+            reason: lastDisconnect?.error?.message || 'unknown',
+            statusCode: statusCode,
+            fullError: lastDisconnect
           });
 
-          // Manejar errores de stream específicamente
-          if (update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
-            update.lastDisconnect?.error?.message?.includes('Stream Errored') ||
-            update.lastDisconnect?.error?.message?.includes('restart required')) {
-            handleStreamError(update.lastDisconnect.error, update);
+          // DETECTAR CIERRE DE SESIÓN DESDE WHATSAPP (loggedOut)
+          if (statusCode === DisconnectReason.loggedOut) {
+            logger.warn('⚠️ User logged out from WhatsApp! Cleaning auth_info...');
+            
+            // Limpiar la carpeta auth_info
+            await cleanupAuthInfo();
+            
+            // Actualizar estado
+            connectionState.connectionStatus = 'logged_out';
+            connectionState.qrData = null;
+            
+            // Emitir evento especial al frontend indicando logout
+            try {
+              const logoutStatus = {
+                ...getQRStatus(),
+                isLoggedOut: true,
+                message: 'Sesión cerrada desde WhatsApp. Por favor, escanea el QR nuevamente.'
+              };
+              emitQrStatusUpdate(logoutStatus);
+              logger.info('Logout status emitted to frontend');
+            } catch (emitError) {
+              logger.error('Error emitting logout status', { error: emitError.message });
+            }
+            
+            // NO intentar reconectar automáticamente cuando es un logout intencional
+            return;
+          }
+
+          // Manejar errores de stream específicamente (solo si NO es logout)
+          if (lastDisconnect?.error?.data?.attrs?.code === '515' ||
+            lastDisconnect?.error?.message?.includes('Stream Errored') ||
+            lastDisconnect?.error?.message?.includes('restart required')) {
+            handleStreamError(lastDisconnect.error, update);
           }
 
           try {

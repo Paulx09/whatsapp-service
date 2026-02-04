@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 //import { getTemplate, getTemplateMessage } from '../templates.js';
 import { getTemplate } from '../templates.js';
@@ -126,6 +126,30 @@ export async function startWhatsAppBot() {
   }
 }
 
+// Función para limpiar la carpeta auth_info cuando el usuario cierra sesión desde WhatsApp
+async function cleanupAuthInfo() {
+  try {
+    const authPath = path.resolve(process.cwd(), 'auth_info');
+    
+    if (fs.existsSync(authPath)) {
+      // Eliminar todos los archivos dentro de auth_info
+      const files = fs.readdirSync(authPath);
+      for (const file of files) {
+        const filePath = path.join(authPath, file);
+        if (fs.statSync(filePath).isFile()) {
+          fs.unlinkSync(filePath);
+          logger.info('Deleted auth file', { file });
+        }
+      }
+      logger.info('auth_info folder cleaned successfully');
+      return true;
+    }
+    return false;
+  } catch (error) {
+    logger.error('Error cleaning auth_info', { error: error.message, stack: error.stack });
+    return false;
+  }
+}
 
 // Función para limpiar completamente el estado
 async function cleanupConnection(removeAuth = false) {
@@ -405,7 +429,7 @@ async function createNewSession() {
     });
 
     // Configurar event handlers para mejor manejo de conexión
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
       try {
         const connectionDetail = {
           connection: update.connection,
@@ -437,26 +461,22 @@ async function createNewSession() {
             logger.error('Error emitting connection status', { error: emitError.message });
           }
         } else if (update.connection === 'close') {
+          const lastDisconnect = update.lastDisconnect;
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          
           connectionState.connectionStatus = 'disconnected';
           connectionState.isConnecting = false;
 
-          // Manejar errores de stream o deslogueo
-          const statusCode = update.lastDisconnect?.error?.output?.statusCode;
-          const isLoggedOut = statusCode === 401;
-          const isRestartRequired =
-            update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
-            update.lastDisconnect?.error?.message?.includes('restart required');
+          logger.warn('Connection closed', {
+            reason: update.lastDisconnect?.error?.message || 'unknown',
+            statusCode: update.lastDisconnect?.statusCode
+          });
 
-          if (isLoggedOut || isRestartRequired) {
-            logger.warn('Connection closed - handling restart/logout', { statusCode, isLoggedOut, isRestartRequired });
-
-            if (isLoggedOut) {
-              logger.info('User logged out, clearing credentials...');
-              cleanupConnection(true);
-            } else {
-              logger.info('Restart required, attempting reconnection without clearing credentials...');
-              attemptReconnect();
-            }
+          // Manejar errores de stream específicamente
+          if (update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
+            update.lastDisconnect?.error?.message?.includes('Stream Errored') ||
+            update.lastDisconnect?.error?.message?.includes('restart required')) {
+            handleStreamError(update.lastDisconnect.error, update);
           }
 
           try {

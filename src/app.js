@@ -7,7 +7,7 @@ import { Server } from 'socket.io';
 import messageRoutes from './routes/message.routes.js';
 import authRoutes from './routes/auth.routes.js';
 import jwt from 'jsonwebtoken';
-import whatsappService, {startWhatsAppBot} from './services/whatsapp.service.js';
+import whatsappService, { startWhatsAppBot } from './services/whatsapp.service.js';
 import sessionManager from './services/session.manager.js';
 import 'dotenv/config';
 import path from "path";
@@ -68,42 +68,68 @@ const limiter = rateLimit({
 
 app.use(limiter);
 
+app.use((req, res, next) => {
+  console.log(`[DEBUG] ${req.method} ${req.path}`);
+  next();
+});
+
 // Rutas de autenticación (sin API key)
 app.use('/api/auth', authRoutes);
 
 // Rutas de mensajes (con API key)
-app.use('/api', messageRoutes);
+app.use('/api/whatsapp', messageRoutes);
 
 // WebSocket para QR status
-io.on('connection', (socket) => {
+io.on('connection', async (socket) => {
   console.log('Cliente conectado:', socket.id);
 
-  // Verificar autenticación del token
   const token = socket.handshake.auth.token;
   if (!token) {
-    console.log('Se desconecto por que no hay token');
+    console.log('Conexión rechazada: No hay token');
     socket.disconnect();
     return;
   }
 
-  // Verificar JWT
-  jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
-    if (err) {
-      console.log('Se desconecto por que la verificacion del token es falsa');
-      socket.disconnect();
-      return;
+  // Lógica de autenticación (Interna o Laravel)
+  let userData = null;
+  try {
+    userData = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (err) {
+    // Intentar con Laravel
+    try {
+      const mainBackendUrl = process.env.MAIN_BACKEND_URL || 'http://127.0.0.1:8000';
+      const response = await fetch(`${mainBackendUrl}/api/me`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json'
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        userData = {
+          userId: data.user?.id || data.id,
+          username: data.user?.name || data.name
+        };
+      }
+    } catch (fetchErr) {
+      console.error('Error socket auth Laravel:', fetchErr.message);
     }
+  }
 
-    // Guardar información del usuario en el socket
-    socket.userId = decoded.userId;
-    socket.user = decoded;
+  if (!userData) {
+    console.log('Conexión rechazada: Token inválido');
+    socket.disconnect();
+    return;
+  }
 
-    // Enviar estado inicial del QR
-    const qrStatus = whatsappService.getQRStatus();
-    socket.emit('qr-status-update', qrStatus);
+  // Guardar info y proceder
+  socket.userId = userData.userId;
+  socket.user = userData;
 
-    console.log('Usuario autenticado:', decoded.username);
-  });
+  const qrStatus = whatsappService.getQRStatus();
+  socket.emit('qr-status-update', qrStatus);
+  console.log('Usuario socket autenticado:', userData.username);
 
   // Unirse a la sala del usuario
   socket.on('join-user', (userId) => {

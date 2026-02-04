@@ -190,6 +190,13 @@ class SessionManager {
       const res = await this.autoRefreshSession(reconnectCallback);
       if (res.success) return;
 
+      // Si las credenciales no existen o son inválidas, no tiene sentido reintentar
+      // hasta que el usuario escanee un QR manualmente.
+      if (['missing', 'corrupted', 'invalid'].includes(res.status)) {
+        logger.info('SessionManager: credentials not found or invalid, stopping auto-refresh. Waiting for manual QR scan.');
+        return;
+      }
+
       if (state.consecutiveFailures >= CONFIG.MAX_RECONNECT_ATTEMPTS) {
         logger.warn('SessionManager: reached max consecutive failures, stopping retries');
         return;

@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 //import { getTemplate, getTemplateMessage } from '../templates.js';
 import { getTemplate } from '../templates.js';
@@ -371,44 +371,50 @@ function handleStreamError(error, update) {
 // Función principal para crear nueva sesión
 async function createNewSession() {
   try {
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    logger.info(`Using WhatsApp version: ${version.join('.')}, isLatest: ${isLatest}`);
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const config = getWhatsAppConfig();
 
     const sock = makeWASocket({
+      version: version || [2, 3000, 1015901307],
       auth: state,
       printQRInTerminal: config.security?.printQRInTerminal || false,
-      connectTimeoutMs: config.stability?.connectionTimeout || config.connection?.connectTimeoutMs || 30000,
-      browser: [config.browser?.name || 'Chrome', config.browser?.version || '120.0.0.0', config.browser?.os || 'Windows'],
-      keepAliveIntervalMs: config.connection?.keepAliveIntervalMs || 60000,
-      markOnlineOnConnect: config.security?.markOnlineOnConnect !== false,
+      connectTimeoutMs: 60000,
+      browser: ['Ubuntu', 'Chrome', '110.0.5481.177'],
+      keepAliveIntervalMs: 30000,
+      markOnlineOnConnect: true,
       syncFullHistory: false,
-      retryRequestDelayMs: config.connection?.retryRequestDelayMs || 1000,
-      maxRetries: config.connection?.maxRetries || 5,
+      shouldSyncHistoryDevices: false,
+      receivedPendingNotifications: false,
+      retryRequestDelayMs: 2000,
+      maxRetries: 5,
       emitOwnEvents: false,
       shouldIgnoreJid: (jid) => jid?.includes('@broadcast'),
-      patchMessageBeforeSending: (msg) => {
-        if (msg.message) {
-          msg.messageTimestamp = Date.now();
-        }
-        return msg;
-      },
       ws: {
-        timeout: config.stability?.networkTimeout || config.websocket?.timeout || 30000,
+        timeout: 60000,
         keepalive: true,
-        keepaliveInterval: config.websocket?.keepaliveInterval || 15000,
+        keepaliveInterval: 15000,
       }
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', () => {
+      logger.info('Credentials updated, saving...');
+      saveCreds();
+    });
 
     // Configurar event handlers para mejor manejo de conexión
     sock.ev.on('connection.update', (update) => {
       try {
-        logger.info('Connection update', {
+        const connectionDetail = {
           connection: update.connection,
-          lastDisconnect: update.lastDisconnect,
-          qr: update.qr ? 'present' : 'absent'
-        });
+          qr: update.qr ? 'present' : 'absent',
+          statusCode: update.lastDisconnect?.error?.output?.statusCode,
+          reason: update.lastDisconnect?.error?.message
+        };
+
+        logger.info('Connection update detailed', connectionDetail);
 
         // Manejar cambios de estado de conexión
         if (update.connection === 'connecting') {
@@ -422,8 +428,8 @@ async function createNewSession() {
           connectionState.qrData = null;
           connectionState.reconnectAttempts = 0;
           connectionState.isReconnecting = false;
-          connectionState.me = sock.user; // Guardar info del usuario (contiene id con el número)
-          logger.info('WhatsApp connected successfully', { me: sock.user });
+          connectionState.me = sock.user;
+          logger.info('✅ WhatsApp connected successfully!', { user: sock.user.id });
 
           try {
             emitQrStatusUpdate(getQRStatus());
@@ -436,19 +442,20 @@ async function createNewSession() {
 
           // Manejar errores de stream o deslogueo
           const statusCode = update.lastDisconnect?.error?.output?.statusCode;
-          const shouldClearAuth =
-            statusCode === 401 ||
+          const isLoggedOut = statusCode === 401;
+          const isRestartRequired =
+            update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
             update.lastDisconnect?.error?.message?.includes('restart required');
 
-          if (update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
-            update.lastDisconnect?.error?.message?.includes('Stream Errored') ||
-            shouldClearAuth) {
+          if (isLoggedOut || isRestartRequired) {
+            logger.warn('Connection closed - handling restart/logout', { statusCode, isLoggedOut, isRestartRequired });
 
-            logger.warn('Critical connection error, handling...', { statusCode, shouldClearAuth });
-            handleStreamError(update.lastDisconnect.error, update);
-
-            if (shouldClearAuth) {
+            if (isLoggedOut) {
+              logger.info('User logged out, clearing credentials...');
               cleanupConnection(true);
+            } else {
+              logger.info('Restart required, attempting reconnection without clearing credentials...');
+              attemptReconnect();
             }
           }
 

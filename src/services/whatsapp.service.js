@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 //import { getTemplate, getTemplateMessage } from '../templates.js';
 import { getTemplate } from '../templates.js';

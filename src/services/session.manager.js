@@ -7,16 +7,20 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const CONFIG = {
-  AUTO_REFRESH_ENABLED: process.env.AUTO_REFRESH_SESSION === 'true',
+  AUTO_REFRESH_ENABLED: process.env.AUTO_REFRESH_SESSION ,
   MAX_RECONNECT_ATTEMPTS: parseInt(process.env.MAX_RECONNECT_ATTEMPTS || '3', 10),
   RECONNECT_TIMEOUT: parseInt(process.env.RECONNECT_TIMEOUT || '30000', 10),
   RECONNECT_COOLDOWN: parseInt(process.env.RECONNECT_COOLDOWN || '10000', 10),
   AUTH_FOLDER: 'auth_info',
   // Por defecto habilitamos health check salvo que se ponga 'false'
-  HEALTH_CHECK_ENABLED: process.env.WHATSAPP_HEALTH_CHECK !== 'false',
+  HEALTH_CHECK_ENABLED: process.env.WHATSAPP_HEALTH_CHECK,
   HEALTH_CHECK_TIMEOUT: parseInt(process.env.HEALTH_CHECK_TIMEOUT || '5000', 10),
   // máximo delay para backoff
-  MAX_BACKOFF: parseInt(process.env.MAX_BACKOFF || '300000', 10) // 5 minutos
+  MAX_BACKOFF: parseInt(process.env.MAX_BACKOFF || '300000', 10), // 5 minutos
+  // Unificar constantes de debounce y verificación
+  DEBOUNCE_MS: 30000,
+  VERIFY_RETRIES: 3,
+  VERIFY_BACKOFF_MS: 2000
 };
 
 const state = {
@@ -26,7 +30,107 @@ const state = {
   lastValidationTimestamp: 0
 };
 
+const AUTH_INFO_PATH = process.env.AUTH_INFO_PATH || path.resolve(process.cwd(), CONFIG.AUTH_FOLDER);
+
+const runtime = {
+  pendingCloseTimer: null,
+  lastDisconnectInfo: null,
+  isClearing: false
+};
+
 class SessionManager {
+  _isLogoutIndicator(lastDisconnect) {
+    if (!lastDisconnect) return false;
+    const msg = (lastDisconnect.error && (lastDisconnect.error.message || lastDisconnect.error.toString())) || '';
+    const status = lastDisconnect.statusCode || lastDisconnect?.error?.statusCode || '';
+
+    const indicators = [
+      'logged out',
+      'invalid_session',
+      'Authentication',
+      'auth',
+      'Bad session',
+      '401',
+      '403'
+    ];
+
+    const lower = String(msg).toLowerCase();
+    if (indicators.some(i => lower.includes(String(i).toLowerCase()))) return true;
+    if (String(status) === '401' || String(status) === '403') return true;
+    return false;
+  }
+
+
+  async handleConnectionUpdate(update = {}) {
+    const { connection, lastDisconnect } = update;
+    runtime.lastDisconnectInfo = lastDisconnect || null;
+
+    if (connection === 'open') {
+      if (runtime.pendingCloseTimer) {
+        clearTimeout(runtime.pendingCloseTimer);
+        runtime.pendingCloseTimer = null;
+        logger.info('SessionManager: connection reopened, cancelled pending clear');
+      }
+      return;
+    }
+
+    if (connection === 'close') {
+
+      const isLogout = this._isLogoutIndicator(lastDisconnect);
+
+      if (runtime.pendingCloseTimer) {
+        clearTimeout(runtime.pendingCloseTimer);
+        runtime.pendingCloseTimer = null;
+      }
+
+      const waitMs = isLogout ? 2000 : CONFIG.DEBOUNCE_MS;
+      logger.info('SessionManager: connection closed detected, scheduling verify', { waitMs, isLogout });
+
+      runtime.pendingCloseTimer = setTimeout(async () => {
+        try {
+          runtime.pendingCloseTimer = null;
+          await this._verifyAndMaybeClear(lastDisconnect);
+        } catch (error) {
+          logger.error('SessionManager: error in scheduled verify', { error: error.message });
+        }
+      }, waitMs);
+    }
+  }
+
+  async cancelPendingClear() {
+    if (runtime.pendingCloseTimer) {
+      clearTimeout(runtime.pendingCloseTimer);
+      runtime.pendingCloseTimer = null;
+      logger.info('SessionManager: pending clear cancelled');
+    }
+  }
+
+  async _verifyAndMaybeClear(lastDisconnect) {
+    if (runtime.isClearing) {
+      logger.info('SessionManager: clear already in progress, skipping');
+      return;
+    }
+
+    for (let attempt = 1; attempt <= CONFIG.VERIFY_RETRIES; attempt++) {
+      try {
+        const val = await this.validateCredentials();
+        if (val.valid) {
+          logger.info('SessionManager: credentials still valid, aborting clear', { attempt });
+          return;
+        }
+
+        logger.info('SessionManager: credential check failed', { attempt, status: val.status });
+
+      } catch (err) {
+        logger.warn('SessionManager: credential check error', { attempt, error: err.message });
+      }
+
+      const delay = CONFIG.VERIFY_BACKOFF_MS * Math.pow(2, attempt - 1);
+      await new Promise(res => setTimeout(res, delay));
+    }
+
+  }
+
   async _pingWhatsApp() {
     if (!CONFIG.HEALTH_CHECK_ENABLED) return true;
 
@@ -206,6 +310,28 @@ class SessionManager {
 
     // Lanzar primer intento sincrónico (no await bloqueante de app startup)
     attempt().catch(e => logger.error('SessionManager: initial attempt error', { error: e.message }));
+  }
+  getReconnectionStatus() {
+    return {
+      isReconnecting: state.isOperationInProgress,
+      reconnectAttempts: state.consecutiveFailures,
+      maxReconnectAttempts: CONFIG.MAX_RECONNECT_ATTEMPTS,
+      lastConnectionAttempt: state.lastAttemptTimestamp
+    };
+  }
+
+  // Nuevo endpoint para obtener estado general
+  getState() {
+    return { ...state };
+  }
+
+  // Nuevo endpoint para obtener info de runtime
+  getRuntimeInfo() {
+    return {
+      hasPendingCloseTimer: !!runtime.pendingCloseTimer,
+      lastDisconnectInfo: runtime.lastDisconnectInfo,
+      isClearing: runtime.isClearing
+    };
   }
 }
 

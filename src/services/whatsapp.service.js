@@ -6,6 +6,7 @@ import logger from '../utils/logger.js';
 import { emitQrStatusUpdate } from '../app.js';
 import { getWhatsAppConfig } from '../config/whatsapp.config.js';
 import { chatbotFlow } from '../chatbot/chatbotFlow.js';
+import sessionManager from './session.manager.js';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
@@ -40,11 +41,6 @@ const connectionState = {
   userConnections: new Map(),
   sentMessages: [],
   connectionStatus: 'disconnected',
-  reconnectAttempts: 0,
-  maxReconnectAttempts: 5,
-  reconnectTimer: null,
-  isReconnecting: false,
-  lastConnectionAttempt: 0,
 
   conversations: new Map(), // key: userId, value: { step: number, context: any }
 };
@@ -126,6 +122,9 @@ export async function startWhatsAppBot() {
   sock.ev.on('connection.update', (update) => {
   const { connection, lastDisconnect } = update;
   console.log("📡 Estado de conexión:", connection);
+
+  // Delegate connection update to session manager trigger logic
+  try { sessionManager.handleConnectionUpdate(update); } catch (e) { logger.error('sessionManager.handleConnectionUpdate failed', { error: e?.message }); }
 
   if (connection === 'open') {
     console.log("✅ Bot conectado correctamente a WhatsApp");
@@ -212,7 +211,6 @@ async function cleanupConnection() {
     connectionState.qrData = null;
     connectionState.isConnecting = false;
     connectionState.connectionStatus = 'disconnected';
-    connectionState.isReconnecting = false;
   }
 }
 
@@ -241,8 +239,8 @@ function getQRStatus() {
       hasSocket: !!connectionState.socket,
       socketStatus: connectionState.connectionStatus,
       status: connectionState.connectionStatus,
-      reconnectAttempts: connectionState.reconnectAttempts,
-      isReconnecting: connectionState.isReconnecting
+      reconnectAttempts: sessionManager.getReconnectionStatus().reconnectAttempts,
+      isReconnecting: sessionManager.getReconnectionStatus().isReconnecting
     },
     lastUpdated: new Date().toISOString()
   };
@@ -341,57 +339,20 @@ async function generateNewQR(session) {
   });
 }
 
-// Función para reconexión automática (CORREGIDA)
+// Función para reconexión automática (REFactorizada para reutilizar sessionManager)
 async function attemptReconnect() {
-  const config = getWhatsAppConfig();
-  const maxAttempts = config.stability?.maxReconnectAttempts || 5;
+  const res = await sessionManager.autoRefreshSession(async () => {
+    connectionState.connectionStatus = 'connecting';
+    await cleanupConnection();
+    connectionState.socket = await createNewSession();
+    connectionState.connectionStatus = 'connected';
+  });
 
-  // CORREGIDO: Verificar correctamente el límite de intentos
-  if (connectionState.isReconnecting || connectionState.reconnectAttempts >= maxAttempts) {
-    logger.warn('Max reconnection attempts reached or already reconnecting', {
-      attempts: connectionState.reconnectAttempts,
-      maxAttempts: maxAttempts,
-      isReconnecting: connectionState.isReconnecting
-    });
-    return;
+  if (res.success) {
+    logger.info('Reconnection successful via sessionManager');
+  } else {
+    logger.warn('Reconnection failed via sessionManager', { status: res.status, error: res.error });
   }
-
-  if (connectionState.reconnectTimer) {
-    clearTimeout(connectionState.reconnectTimer);
-  }
-
-  connectionState.isReconnecting = true;
-  connectionState.reconnectTimer = setTimeout(async () => {
-    try {
-      logger.info('Attempting automatic reconnection', {
-        attempt: connectionState.reconnectAttempts + 1,
-        maxAttempts: maxAttempts
-      });
-
-      connectionState.reconnectAttempts++;
-      connectionState.connectionStatus = 'connecting';
-
-      await cleanupConnection();
-      connectionState.socket = await createNewSession();
-
-      logger.info('Reconnection successful');
-      connectionState.reconnectAttempts = 0;
-      connectionState.isReconnecting = false;
-
-    } catch (error) {
-      logger.error('Reconnection failed', {
-        error: error.message,
-        attempt: connectionState.reconnectAttempts
-      });
-
-      connectionState.isReconnecting = false;
-
-      // Intentar de nuevo si no se alcanzó el límite
-      if (connectionState.reconnectAttempts < maxAttempts) {
-        attemptReconnect();
-      }
-    }
-  }, config.stability?.reconnectDelay || 3000);
 }
 
 // Función para manejar errores de stream específicamente
@@ -464,18 +425,17 @@ async function createNewSession() {
           qr: update.qr ? 'present' : 'absent'
         });
 
+        // Delegate to session manager for debounce/verification and potential auth_info cleanup
+        try { sessionManager.handleConnectionUpdate(update); } catch (e) { logger.error('sessionManager.handleConnectionUpdate failed', { error: e?.message }); }
+
         // Manejar cambios de estado de conexión
         if (update.connection === 'connecting') {
           connectionState.connectionStatus = 'connecting';
           connectionState.isConnecting = true;
-          connectionState.reconnectAttempts = 0;
-          connectionState.lastConnectionAttempt = Date.now();
         } else if (update.connection === 'open') {
           connectionState.connectionStatus = 'connected';
           connectionState.isConnecting = false;
           connectionState.qrData = null;
-          connectionState.reconnectAttempts = 0;
-          connectionState.isReconnecting = false;
           logger.info('WhatsApp connected successfully');
 
           try {
@@ -675,7 +635,7 @@ export default {
     
     logger.info('Requesting new QR code', { userId });    
     // GUARDÍAN: Si ya estamos conectando o reconectando, no hacer nada.
-    if (connectionState.isConnecting || connectionState.isReconnecting) {
+    if (connectionState.isConnecting || sessionManager.getReconnectionStatus().isReconnecting) {
       logger.warn('Ignoring QR request: A connection attempt is already in progress.');
       throw {
         code: 'CONNECTION_IN_PROGRESS',
@@ -1209,19 +1169,12 @@ export default {
   // Nuevo método para forzar reconexión manual
   async forceReconnect() {
     logger.info('Forcing manual reconnection');
-    connectionState.reconnectAttempts = 0;
-    connectionState.isReconnecting = false;
     await attemptReconnect();
   },
 
   // Método para obtener estado de reconexión
   getReconnectionStatus() {
-    return {
-      isReconnecting: connectionState.isReconnecting,
-      reconnectAttempts: connectionState.reconnectAttempts,
-      maxReconnectAttempts: connectionState.maxReconnectAttempts,
-      lastConnectionAttempt: connectionState.lastConnectionAttempt
-    };
+    return sessionManager.getReconnectionStatus();
   },
 
   // Método para generar QR en formato específico

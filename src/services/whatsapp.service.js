@@ -1,7 +1,5 @@
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
-//import { getTemplate, getTemplateMessage } from '../templates.js';
 import { getTemplate } from '../templates.js';
 import logger from '../utils/logger.js';
 import { emitQrStatusUpdate } from '../app.js';
@@ -49,7 +47,6 @@ const connectionState = {
 
   conversations: new Map(), // key: userId, value: { step: number, context: any }
 };
-
 
 function handleIncomingMessage(userId, message) {
   let conv = connectionState.conversations.get(userId);
@@ -102,12 +99,9 @@ function handleIncomingMessage(userId, message) {
     return nextFlow.message;
   }
 
-  // 🚫 Si la opción no es válida
   connectionState.conversations.set(userId, conv);
   return `❌ Opción no válida.\n\n${currentStep.message}`;
 }
-
-
 
 export async function startWhatsAppBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -136,8 +130,7 @@ export async function startWhatsAppBot() {
 });
 
   connectionState.socket = sock;
-
-  // 🔹 Ahora sí registramos los eventos
+  // Registramos los eventos
   sock.ev.on('messages.upsert', async ({ messages }) => {
     const msg = messages[0];
     
@@ -182,7 +175,6 @@ export async function startWhatsAppBot() {
       }
     }
   });
-
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -847,7 +839,7 @@ export default {
 
     const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
 
-    // 🔹 Obtiene la plantilla (objeto con text + image)
+    // Obtiene la plantilla (objeto con text + image)
     const plantilla = getTemplate(id_servicio, templateOption, { nombre });
 
     if (!plantilla || !plantilla.text) {
@@ -1456,10 +1448,4 @@ export default {
       throw new Error(`Error al enviar mensaje: ${error.message}`);
     }
   },
-
-
- 
 };
-
-//funcion para llegada de mensajes
- 

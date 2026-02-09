@@ -13,7 +13,8 @@ import {
   sendMessageWithImage,
   sendMessageAccept,
   sendMessageReject,
-  sendMessageWithImageDashboard
+  sendMessageWithImageDashboard,
+  sendCampaignBatch
 } from '../controllers/message.controller.js';
 import { 
   validateSendMessage, 
@@ -31,6 +32,7 @@ const router = Router();
 // router.post('/send-message', authenticateJWT, authorizeRole('admin'), validateSendMessage, sendMessage);
 router.post('/send-message', sendMessage);
 router.post('/send-message-image', upload.single("image"), sendMessageWithImageDashboard);
+router.post('/send-campaign-batch', sendCampaignBatch); // Nuevo endpoint para campañas masivas
 
 router.post('/send-message-accept', validateSendMessageAccept, sendMessageAccept);
 router.post('/send-message-reject', validateSendMessageReject, sendMessageReject);

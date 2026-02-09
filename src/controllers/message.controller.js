@@ -636,3 +636,58 @@ export async function sendMessageReject(req, res) {
     });
   }
 }
+
+/**
+ * Envía una campaña en batch (para envíos masivos desde Laravel)
+ */
+export async function sendCampaignBatch(req, res) {
+  try {
+    const { campania_id, chunk_number, recipients, message, image_url, id_servicio } = req.body;
+
+    // Validaciones
+    if (!campania_id || !recipients || !Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Faltan campos requeridos o formato inválido",
+        required: ["campania_id", "recipients (array)", "message", "image_url"]
+      });
+    }
+
+    if (!message || !image_url) {
+      return res.status(400).json({
+        success: false,
+        message: "Se requiere mensaje e imagen para la campaña",
+      });
+    }
+
+    console.log(`[Campaña ${campania_id}] Chunk ${chunk_number}: Procesando ${recipients.length} destinatarios`);
+
+    // Procesar el batch
+    const result = await whatsappService.sendCampaignBatch({
+      campania_id,
+      chunk_number,
+      recipients,
+      message,
+      image_url,
+      id_servicio
+    });
+
+    res.json({
+      success: true,
+      campania_id,
+      chunk_number,
+      successful: result.successful,
+      failed: result.failed,
+      results: result.results,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error(`Error en sendCampaignBatch:`, error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}

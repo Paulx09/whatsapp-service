@@ -16,11 +16,11 @@ import {
   sendMessageWithImageDashboard,
   sendCampaignBatch
 } from '../controllers/message.controller.js';
-import { 
-  validateSendMessage, 
-  validateSendImage, 
-  validateSendMessageAccept, 
-  validateSendMessageReject 
+import {
+  validateSendMessage,
+  validateSendImage,
+  validateSendMessageAccept,
+  validateSendMessageReject
 } from '../validators/message.validator.js';
 import { authenticateJWT, authorizeRole } from '../middlewares/auth.middleware.js';
 import { upload } from '../config/message.config.js';
@@ -50,6 +50,15 @@ router.post('/force-reconnect', authenticateJWT, authorizeRole('admin'), forceRe
 
 router.get('/templates', (req, res) => {
   res.json(templateList);
+});
+
+// Nuevas rutas para el frontend (Sin prefijo /whatsapp/ aquí porque se añade en app.js)
+router.post('/restart', authenticateJWT, authorizeRole('admin'), requestNewQr);
+router.post('/template', authenticateJWT, authorizeRole('admin'), upload.single('image'), (req, res) => {
+  res.json({ success: true, message: "Plantilla recibida", data: req.body, file: req.file });
+});
+router.post('/activate', authenticateJWT, authorizeRole('admin'), (req, res) => {
+  res.json({ success: true, message: "Campaña activada" });
 });
 
 export default router;

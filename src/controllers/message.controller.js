@@ -11,9 +11,9 @@ const __dirname = path.dirname(__filename);
 
 export async function sendMessage(req, res) {
   try {
-const { nombre, templateOption, telefono, fecha = null, hora = null, id_servicio} = req.body;
+    const { nombre, templateOption, telefono, fecha = null, hora = null, id_servicio } = req.body;
 
-      const result = await whatsappService.sendMessage({
+    const result = await whatsappService.sendMessage({
       nombre,
       templateOption,
       telefono,
@@ -31,7 +31,7 @@ const { nombre, templateOption, telefono, fecha = null, hora = null, id_servicio
     res.status(500).json({
       success: false,
       message: error.message,
-      abcd:error,
+      abcd: error,
       timestamp: new Date().toISOString(),
     });
   }
@@ -44,10 +44,10 @@ export async function sendMessageWithImageDashboard(req, res) {
     const image = req.file
       ? `${BASE_URL}/public/imagenes_dashboard/${req.file.filename}`
       : null;
-    
-      console.log('image',image)
-    
-      const result = await whatsappService.sendMessageImageDashboard({
+
+    console.log('image', image)
+
+    const result = await whatsappService.sendMessageImageDashboard({
       nombre,
       id_service,
       telefono,
@@ -214,10 +214,27 @@ export async function requestNewQr(req, res) {
     }
   } catch (error) {
     console.error('Error al solicitar nuevo QR:', error);
+
+    // Si error es un objeto con estructura de negocio {code, message}
+    if (error && error.code) {
+      const statusCodeMap = {
+        'CONNECTION_IN_PROGRESS': 400,
+        'QR_ACTIVE': 409,
+        'RATE_LIMITED': 429,
+        'SESSION_ERROR': 500
+      };
+
+      return res.status(statusCodeMap[error.code] || 400).json({
+        success: false,
+        code: error.code,
+        message: error.message || 'Error en la solicitud'
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error interno del servidor',
-      error: error.message,
+      error: error.message || error.toString(),
       timestamp: new Date().toISOString(),
     });
   }
@@ -360,7 +377,7 @@ export function resetAuth(req, res) {
         });
       } else {
         console.log(`Carpeta ${authPath} eliminada correctamente.`);
-        
+
         fs.mkdir(authPath, { recursive: true }, (mkdirErr) => {
           if (mkdirErr) {
             console.error(`Error creando la carpeta ${authPath}:`, mkdirErr);

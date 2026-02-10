@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
 import { getTemplate } from '../templates.js';
 import logger from '../utils/logger.js';
@@ -49,6 +49,8 @@ const connectionState = {
   conversations: new Map(), // key: userId, value: { step: number, context: any }
 };
 
+// ⚠️ FUNCIÓN DE CHATBOT DESHABILITADA - No usar en producción para evitar respuestas automáticas
+/*
 function handleIncomingMessage(userId, message) {
   let conv = connectionState.conversations.get(userId);
   const now = Date.now();
@@ -103,6 +105,7 @@ function handleIncomingMessage(userId, message) {
   connectionState.conversations.set(userId, conv);
   return `❌ Opción no válida.\n\n${currentStep.message}`;
 }
+*/
 
 export async function startWhatsAppBot() {
   logger.info("🚀 Iniciando Bot de WhatsApp...");
@@ -110,6 +113,22 @@ export async function startWhatsAppBot() {
     // Si ya hay una sesión activa, limpiarla primero
     if (connectionState.socket) {
       await cleanupConnection();
+    }
+
+    // Verificar si existe auth_info con credenciales
+    const authPath = path.resolve(process.cwd(), 'auth_info');
+    const hasAuthInfo = fs.existsSync(authPath) && fs.readdirSync(authPath).length > 0;
+    
+    if (hasAuthInfo) {
+      logger.info("📂 Credenciales encontradas en auth_info, intentando reconexión automática...");
+      emitQrStatusUpdate({
+        hasActiveQR: false,
+        isConnected: false,
+        connectionState: {
+          status: 'reconnecting',
+          message: 'Intentando reconectar con credenciales existentes...'
+        }
+      });
     }
 
     // Iniciar nueva sesión usando la lógica centralizada
@@ -121,27 +140,47 @@ export async function startWhatsAppBot() {
   }
 }
 
+// ✅ Función auxiliar para obtener el nombre legible del DisconnectReason
+function getDisconnectReasonName(statusCode) {
+  const reasons = {
+    [DisconnectReason.connectionClosed]: 'Connection Closed',
+    [DisconnectReason.connectionLost]: 'Connection Lost',
+    [DisconnectReason.connectionReplaced]: 'Connection Replaced',
+    [DisconnectReason.timedOut]: 'Timed Out',
+    [DisconnectReason.loggedOut]: 'Logged Out',
+    [DisconnectReason.badSession]: 'Bad Session',
+    [DisconnectReason.restartRequired]: 'Restart Required',
+    [DisconnectReason.multideviceMismatch]: 'Multidevice Mismatch',
+    [DisconnectReason.forbidden]: 'Forbidden',
+    [DisconnectReason.unavailableService]: 'Unavailable Service'
+  };
+  return reasons[statusCode] || `Unknown (${statusCode})`;
+}
+
 // Función para limpiar la carpeta auth_info cuando el usuario cierra sesión desde WhatsApp
 async function cleanupAuthInfo() {
   try {
     const authPath = path.resolve(process.cwd(), 'auth_info');
     
     if (fs.existsSync(authPath)) {
+      logger.info('🧹 Limpiando carpeta auth_info...');
       // Eliminar todos los archivos dentro de auth_info
       const files = fs.readdirSync(authPath);
       for (const file of files) {
         const filePath = path.join(authPath, file);
         if (fs.statSync(filePath).isFile()) {
           fs.unlinkSync(filePath);
-          logger.info('Deleted auth file', { file });
+          logger.info('🗑️ Archivo de autenticación eliminado', { file });
         }
       }
-      logger.info('auth_info folder cleaned successfully');
+      logger.info('✅ Carpeta auth_info limpiada exitosamente');
       return true;
+    } else {
+      logger.info('ℹ️ Carpeta auth_info no existe, nada que limpiar');
     }
     return false;
   } catch (error) {
-    logger.error('Error cleaning auth_info', { error: error.message, stack: error.stack });
+    logger.error('❌ Error limpiando auth_info', { error: error.message, stack: error.stack });
     return false;
   }
 }
@@ -464,14 +503,91 @@ async function createNewSession() {
 
           logger.warn('Connection closed', {
             reason: update.lastDisconnect?.error?.message || 'unknown',
-            statusCode: update.lastDisconnect?.statusCode
+            statusCode: statusCode,
+            disconnectReason: getDisconnectReasonName(statusCode)
           });
 
-          // Manejar errores de stream específicamente
-          if (update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
+          // ✅ NUEVO: Detectar logout desde teléfono y limpiar auth_info
+          if (statusCode === DisconnectReason.loggedOut) {
+            logger.warn('⚠️ Usuario cerró sesión desde WhatsApp, limpiando auth_info...');
+            await cleanupAuthInfo();
+            
+            // Notificar al frontend sobre el logout
+            try {
+              emitQrStatusUpdate({
+                hasActiveQR: false,
+                isConnected: false,
+                connectionState: {
+                  status: 'logged_out',
+                  message: 'Sesión cerrada desde el teléfono. Credenciales eliminadas.',
+                  reason: 'user_logout'
+                },
+                lastUpdated: new Date().toISOString()
+              });
+            } catch (emitError) {
+              logger.error('Error emitting logout status', { error: emitError.message });
+            }
+          }
+          // ✅ NUEVO: Detectar sesión inválida/corrupta y limpiar auth_info
+          else if (statusCode === DisconnectReason.badSession) {
+            logger.warn('⚠️ Sesión inválida detectada, limpiando auth_info...');
+            await cleanupAuthInfo();
+            
+            try {
+              emitQrStatusUpdate({
+                hasActiveQR: false,
+                isConnected: false,
+                connectionState: {
+                  status: 'bad_session',
+                  message: 'Sesión inválida. Credenciales eliminadas.',
+                  reason: 'invalid_session'
+                },
+                lastUpdated: new Date().toISOString()
+              });
+            } catch (emitError) {
+              logger.error('Error emitting bad session status', { error: emitError.message });
+            }
+          }
+          // ✅ NUEVO: Detectar reemplazo de conexión (conectado desde otro lugar)
+          else if (statusCode === DisconnectReason.connectionReplaced) {
+            logger.warn('⚠️ Conexión reemplazada (conectado desde otro dispositivo)');
+            await cleanupAuthInfo();
+            
+            try {
+              emitQrStatusUpdate({
+                hasActiveQR: false,
+                isConnected: false,
+                connectionState: {
+                  status: 'connection_replaced',
+                  message: 'Conexión reemplazada desde otro dispositivo.',
+                  reason: 'replaced'
+                },
+                lastUpdated: new Date().toISOString()
+              });
+            } catch (emitError) {
+              logger.error('Error emitting replaced status', { error: emitError.message });
+            }
+          }
+          // Manejar errores de stream específicamente (código 515)
+          else if (statusCode === DisconnectReason.restartRequired ||
+            update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
             update.lastDisconnect?.error?.message?.includes('Stream Errored') ||
             update.lastDisconnect?.error?.message?.includes('restart required')) {
+            logger.info('🔄 Reinicio requerido, intentando reconexión...');
             handleStreamError(update.lastDisconnect.error, update);
+          }
+          // ✅ NUEVO: Para otros tipos de desconexión, intentar reconectar si hay credenciales
+          else {
+            const authPath = path.resolve(process.cwd(), 'auth_info');
+            const hasAuthInfo = fs.existsSync(authPath) && fs.readdirSync(authPath).length > 0;
+            
+            if (hasAuthInfo) {
+              logger.info('📂 Credenciales disponibles, intentando reconexión automática...');
+              const config = getWhatsAppConfig();
+              if (config.stability?.autoReconnect !== false) {
+                attemptReconnect();
+              }
+            }
           }
 
           try {
@@ -491,6 +607,8 @@ async function createNewSession() {
       }
     });
 
+    // ⚠️ CHATBOT DESHABILITADO - No procesar mensajes entrantes en producción
+    /*
     // Manejar mensajes entrantes (Chatbot)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
       if (type !== 'notify') return;
@@ -518,6 +636,7 @@ async function createNewSession() {
         }
       }
     });
+    */
 
     return sock;
   } catch (error) {

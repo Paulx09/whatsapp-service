@@ -1,4 +1,4 @@
-import whatsappService from "../services/whatsapp.service.js";
+import whatsappService, { sendCampaignBatch as sendCampaignBatchService } from "../services/whatsapp.service.js";
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
@@ -680,7 +680,7 @@ export async function sendCampaignBatch(req, res) {
     console.log(`[Campaña ${campania_id}] Chunk ${chunk_number}: Procesando ${recipients.length} destinatarios`);
 
     // Procesar el batch
-    const result = await whatsappService.sendCampaignBatch({
+    const result = await sendCampaignBatchService({
       campania_id,
       chunk_number,
       recipients,

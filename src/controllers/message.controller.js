@@ -593,3 +593,46 @@ export async function sendMessageReject(req, res) {
     });
   }
 }
+
+export async function sendCampaignChunk(req, res) {
+  try {
+    const { campania_id, chunk_number, recipients, parrafo, image_url, id_servicio } = req.body;
+
+    // Llamar al servicio para procesar el lote
+    const result = await whatsappService.sendCampaignBatch({
+      campaiaId: campania_id,
+      chunkNumber: chunk_number,
+      recipients,
+      parrafo,
+      imageUrl: image_url,
+      idServicio: id_servicio
+    });
+
+    res.json({
+      successful: result.successful,
+      failed: result.failed,
+      results: result.results
+    });
+
+  } catch (error) {
+    console.error('Error en sendCampaignChunk:', error);
+
+    // Si es error de validación o conexión
+    if (error.message.includes('conectado')) {
+      return res.status(503).json({
+        successful: 0,
+        failed: 0,
+        results: {},
+        error: error.message
+      });
+    }
+
+    // Error general
+    res.status(500).json({
+      successful: 0,
+      failed: 0,
+      results: {},
+      error: error.message
+    });
+  }
+}

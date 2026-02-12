@@ -12,7 +12,8 @@ import {
   getReconnectionStatus,
   sendMessageWithImage,
   sendMessageAccept,
-  sendMessageReject
+  sendMessageReject,
+  sendCampaignChunk
 } from '../controllers/message.controller.js';
 import { 
   validateSendMessage, 
@@ -20,6 +21,7 @@ import {
   validateSendMessageAccept, 
   validateSendMessageReject 
 } from '../validators/message.validator.js';
+import { validateSendChunk } from '../validators/campaign.validator.js';
 import { authenticateJWT, authorizeRole } from '../middlewares/auth.middleware.js';
 import { Router } from 'express';
 
@@ -39,5 +41,11 @@ router.post('/qr-request', authenticateJWT, authorizeRole('admin'), requestNewQr
 router.post('/qr-expire', authenticateJWT, authorizeRole('admin'), forceExpireQr);
 router.post('/auth/reset', authenticateJWT, authorizeRole('admin'), resetAuth);
 router.post('/force-reconnect', authenticateJWT, authorizeRole('admin'), forceReconnect);
+
+// Endpoint para enviar campañas (lotes de mensajes con imagen)
+router.post('/campaign/send-chunk', validateSendChunk, sendCampaignChunk);
+
+// Endpoint nuevo para envío de batch de campañas
+router.post('/send-campaign-batch', validateSendChunk, sendCampaignChunk);
 
 export default router;

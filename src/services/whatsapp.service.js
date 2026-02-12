@@ -1114,5 +1114,396 @@ export default {
 
       throw new Error(`Error al enviar mensaje: ${error.message}`);
     }
+  },
+
+  // Descargar imagen desde URL y guardarla en carpeta local
+  async downloadImageFromUrl(imageUrl, campaiaId, chunkNumber) {
+    const fs = await import('fs');
+    const path = await import('path');
+    const { fileURLToPath } = await import('url');
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+
+    try {
+      // Crear carpeta de destino si no existe
+      const uploadsDir = path.join(__dirname, '..', 'uploads', 'campaigns');
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      let imageBuffer;
+      let fileName;
+      let mimeType;
+      let filePath;
+
+      // Intentar descargar desde URL o usar archivo local
+      const isRemoteUrl = imageUrl.startsWith('http://') || imageUrl.startsWith('https://');
+      
+      if (isRemoteUrl) {
+        try {
+          // Descargar imagen usando fetch (Node 18+)
+          logger.info('Descargando imagen desde URL', { imageUrl, campaiaId, chunkNumber });
+          const response = await fetch(imageUrl);
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (!contentType || !contentType.startsWith('image/')) {
+            throw new Error('El content-type no es una imagen. Recibido: ' + contentType);
+          }
+
+          // Extraer extensión del content-type
+          mimeType = contentType.split(';')[0].toLowerCase();
+          const extMap = {
+            'image/jpeg': 'jpg',
+            'image/jpg': 'jpg',
+            'image/png': 'png',
+            'image/gif': 'gif',
+            'image/webp': 'webp'
+          };
+          const ext = extMap[mimeType] || 'png';
+
+          // Convertir response a buffer
+          const buffer = await response.arrayBuffer();
+          imageBuffer = Buffer.from(buffer);
+
+          // Validar tamaño máximo (16MB para WhatsApp)
+          const maxSize = 16 * 1024 * 1024;
+          if (imageBuffer.length > maxSize) {
+            throw new Error('La imagen descargada es demasiado grande. Máximo 16MB');
+          }
+
+          // Crear nombre único para la imagen
+          const timestamp = Date.now();
+          const rand = Math.random().toString(36).substring(2, 8);
+          fileName = `campania_${campaiaId}_chunk_${chunkNumber}_${timestamp}_${rand}.${ext}`;
+          filePath = path.join(uploadsDir, fileName);
+
+          logger.info('Imagen descargada desde URL', { fileName, size: imageBuffer.length });
+
+        } catch (fetchError) {
+          // Si falla la descarga, intentar usar archivo local
+          logger.warn('Fallo descarga remota, buscando archivo local', { 
+            imageUrl, 
+            error: fetchError.message 
+          });
+          
+          const urlFileName = imageUrl.split('/').pop()?.split('?')[0];
+          if (!urlFileName) {
+            throw fetchError;
+          }
+
+          const localPath = path.join(uploadsDir, urlFileName);
+          if (!fs.existsSync(localPath)) {
+            throw new Error(`Sin internet y archivo local no existe: ${urlFileName}. Descarga la imagen en src/uploads/campaigns/`);
+          }
+
+          // Usar archivo local
+          imageBuffer = fs.readFileSync(localPath);
+          const ext = urlFileName.substring(urlFileName.lastIndexOf('.')).toLowerCase();
+          const extToMime = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp'
+          };
+          mimeType = extToMime[ext] || 'image/png';
+
+          const timestamp = Date.now();
+          const rand = Math.random().toString(36).substring(2, 8);
+          fileName = `campania_${campaiaId}_chunk_${chunkNumber}_${timestamp}_${rand}_${urlFileName}`;
+          filePath = path.join(uploadsDir, fileName);
+
+          logger.info('Usando archivo local', { localPath, fileName });
+        }
+      } else {
+        // Es una ruta local directa
+        logger.info('Usando ruta local directa', { imageUrl });
+        const localPath = path.join(uploadsDir, imageUrl);
+        
+        if (!fs.existsSync(localPath)) {
+          throw new Error(`Archivo local no encontrado: ${imageUrl}`);
+        }
+
+        imageBuffer = fs.readFileSync(localPath);
+        const ext = imageUrl.substring(imageUrl.lastIndexOf('.')).toLowerCase();
+        const extToMime = {
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+          '.gif': 'image/gif',
+          '.webp': 'image/webp'
+        };
+        mimeType = extToMime[ext] || 'image/png';
+
+        const timestamp = Date.now();
+        const rand = Math.random().toString(36).substring(2, 8);
+        fileName = `campania_${campaiaId}_chunk_${chunkNumber}_${timestamp}_${rand}_${path.basename(imageUrl)}`;
+        filePath = path.join(uploadsDir, fileName);
+      }
+
+      // Guardar imagen en disco
+      fs.writeFileSync(filePath, imageBuffer);
+
+      // Confirmar que existe
+      if (!fs.existsSync(filePath)) {
+        throw new Error('No se pudo confirmar el guardado de la imagen');
+      }
+
+      logger.info('Imagen lista para campaña', {
+        fileName,
+        size: imageBuffer.length,
+        path: filePath
+      });
+
+      return {
+        success: true,
+        fileName,
+        filePath,
+        size: imageBuffer.length,
+        mimeType
+      };
+    } catch (error) {
+      logger.error('Error descargando imagen desde URL', {
+        imageUrl,
+        campaiaId,
+        chunkNumber,
+        error: error.message,
+        stack: error.stack
+      });
+
+      throw error;
+    }
+  },
+
+  // Enviar lote de mensajes con imagen (campaña)
+  async sendCampaignChunk({ campaiaId, chunkNumber, recipients, parrafo, imageUrl, idServicio }) {
+    if (!connectionState.socket?.user) {
+      throw new Error('No conectado a WhatsApp. Por favor, escanea el código QR primero.');
+    }
+
+    const results = [];
+    let imagePath = null;
+    let imageBuffer = null;
+
+    try {
+      // Descargar imagen
+      logger.info('Iniciando descarga de imagen para campaña', {
+        campaiaId,
+        chunkNumber,
+        imageUrl
+      });
+
+      const downloadResult = await this.downloadImageFromUrl(imageUrl, campaiaId, chunkNumber);
+      imagePath = downloadResult.filePath;
+
+      // Leer el buffer de la imagen para enviarla
+      const fs = await import('fs');
+      imageBuffer = fs.readFileSync(imagePath);
+
+      logger.info('Imagen lista para envío', {
+        campaiaId,
+        chunkNumber,
+        fileSize: imageBuffer.length,
+        recipientCount: recipients.length
+      });
+
+      // Procesar cada recipient
+      for (const recipient of recipients) {
+        const { id_modalservicio, nombre, telefono } = recipient;
+
+        try {
+          // Construir caption reemplazando {nombre}
+          let caption = parrafo;
+          if (nombre) {
+            caption = caption.replace(/\{nombre\}/g, nombre);
+          }
+
+          // Limpiar y validar teléfono
+          const cleanPhone = telefono.replace(/\D/g, '');
+          if (cleanPhone.length < 10 || cleanPhone.length > 15) {
+            throw new Error('Número de teléfono inválido: debe tener entre 10 y 15 dígitos');
+          }
+
+          const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
+
+          // Enviar mensaje con imagen
+          const messageOptions = {
+            image: imageBuffer,
+            caption: caption.substring(0, 1024), // Limitar caption a 1024 caracteres
+            jpegThumbnail: null
+          };
+
+          const result = await connectionState.socket.sendMessage(formattedPhone, messageOptions);
+
+          logger.info('Mensaje de campaña enviado exitosamente', {
+            campaiaId,
+            chunkNumber,
+            idModalServicio: id_modalservicio,
+            nombre,
+            phone: formattedPhone,
+            messageId: result.key.id
+          });
+
+          results.push({
+            telefono,
+            nombre,
+            id_modalservicio,
+            status: 'sent',
+            messageId: result.key.id,
+            sentAt: new Date().toISOString()
+          });
+
+          // Pequeña pausa entre mensajes para evitar rate limiting
+          await new Promise(resolve => setTimeout(resolve, 100));
+
+        } catch (recipientError) {
+          logger.error('Error enviando mensaje a recipient de campaña', {
+            campaiaId,
+            chunkNumber,
+            recipient,
+            error: recipientError.message
+          });
+
+          results.push({
+            telefono,
+            nombre,
+            id_modalservicio,
+            status: 'failed',
+            error: recipientError.message
+          });
+        }
+      }
+
+      return {
+        success: true,
+        campaiaId,
+        chunkNumber,
+        idServicio,
+        imageSavedAs: imagePath,
+        recipientsTotal: recipients.length,
+        results
+      };
+
+    } catch (error) {
+      logger.error('Error en sendCampaignChunk', {
+        campaiaId,
+        chunkNumber,
+        error: error.message,
+        stack: error.stack
+      });
+
+      // Limpiar archivo si existe
+      if (imagePath) {
+        try {
+          const fs = await import('fs');
+          if (fs.existsSync(imagePath)) {
+            fs.unlinkSync(imagePath);
+            logger.info('Imagen temporaria eliminada por error', { imagePath });
+          }
+        } catch (cleanupError) {
+          logger.debug('No se pudo eliminar imagen temporal', { error: cleanupError.message });
+        }
+      }
+
+      throw error;
+    }
+  },
+
+  // Enviar batch de campaña con rate limit y usando URL directamente
+  async sendCampaignBatch({ campaiaId, chunkNumber, recipients, parrafo, imageUrl, idServicio }) {
+    if (!connectionState.socket?.user) {
+      throw new Error('No conectado a WhatsApp. Por favor, escanea el código QR primero.');
+    }
+
+    const results = {};
+    let successful = 0;
+    let failed = 0;
+
+    try {
+      logger.info('Iniciando envío de campaña batch', {
+        campaiaId,
+        chunkNumber,
+        imageUrl,
+        recipientCount: recipients.length
+      });
+
+      // Procesar cada recipient uno por uno
+      for (const recipient of recipients) {
+        const { id_modalservicio, nombre, telefono } = recipient;
+
+        try {
+          // Reemplazar {nombre} en el párrafo
+          let caption = parrafo;
+          if (nombre) {
+            caption = caption.replace(/\{nombre\}/g, nombre);
+          }
+
+          // Normalizar y validar teléfono
+          const cleanPhone = telefono.replace(/\D/g, '');
+          if (cleanPhone.length < 10 || cleanPhone.length > 15) {
+            throw new Error('Número de teléfono inválido: debe tener entre 10 y 15 dígitos');
+          }
+
+          const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
+
+          // Enviar mensaje con imagen usando URL directamente
+          const messageOptions = {
+            image: { url: imageUrl },
+            caption: caption.substring(0, 1024) // Limitar caption a 1024 caracteres
+          };
+
+          const result = await connectionState.socket.sendMessage(formattedPhone, messageOptions);
+
+          logger.info('Mensaje de campaña enviado exitosamente', {
+            campaiaId,
+            chunkNumber,
+            idModalServicio: id_modalservicio,
+            nombre,
+            phone: formattedPhone,
+            messageId: result.key.id
+          });
+
+          results[id_modalservicio] = { success: true };
+          successful++;
+
+          // Rate limit: 5000ms por mensaje (12 msg/min)
+          await new Promise(resolve => setTimeout(resolve, 5000));
+
+        } catch (recipientError) {
+          logger.error('Error enviando mensaje a recipient de campaña', {
+            campaiaId,
+            chunkNumber,
+            recipient,
+            error: recipientError.message
+          });
+
+          results[id_modalservicio] = { 
+            success: false, 
+            error: recipientError.message 
+          };
+          failed++;
+        }
+      }
+
+      return {
+        successful,
+        failed,
+        results
+      };
+
+    } catch (error) {
+      logger.error('Error en sendCampaignBatch', {
+        campaiaId,
+        chunkNumber,
+        error: error.message,
+        stack: error.stack
+      });
+
+      throw error;
+    }
   }
 };

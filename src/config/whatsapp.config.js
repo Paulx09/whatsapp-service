@@ -1,10 +1,10 @@
 export const whatsappConfig = {
   // Configuración de conexión optimizada para velocidad
   connection: {
-    connectTimeoutMs: 30_000, // Reducido de 60s a 30s
-    keepAliveIntervalMs: 15_000, // Reducido de 20s a 15s
-    retryRequestDelayMs: 1000, // Reducido de 2s a 1s
-    maxRetries: 5, // Aumentado de 3 a 5
+    connectTimeoutMs: 60_000, // Aumentado a 60s
+    keepAliveIntervalMs: 30_000, // Aumentado a 30s
+    retryRequestDelayMs: 2000,
+    maxRetries: 10, // Aumentado a 10
   },
 
   // Configuración del navegador optimizada (evita baneos)
@@ -17,7 +17,7 @@ export const whatsappConfig = {
   // Configuraciones de seguridad optimizadas
   security: {
     printQRInTerminal: false,
-    markOnlineOnConnect: true, // Cambiado a true para mejor estabilidad
+    markOnlineOnConnect: false, // Cambiado a false para evitar bloqueos en el handshake inicial
     syncFullHistory: false,
     emitOwnEvents: false,
   },
@@ -65,19 +65,20 @@ export const whatsappConfig = {
     autoReconnect: true,
     reconnectDelay: 3000, // 3 segundos
     maxReconnectAttempts: 5,
-    
+
     // Manejo de errores de stream
     handleStreamErrors: true,
     streamErrorRetryDelay: 2000, // 2 segundos
-    
-    // Timeouts más agresivos
-    connectionTimeout: 25000, // 25 segundos
-    qrTimeout: 15000, // 15 segundos
-    
+
+    // Timeouts más generosos
+    connectionTimeout: 60000,
+    qrTimeout: 30000,
+
     // Configuraciones de red
-    networkTimeout: 20000, // 20 segundos
-    pingInterval: 10000, // 10 segundos,
-    
+    networkTimeout: 40000,
+    pingInterval: 20000,
+    browser: ['Windows', 'Chrome', '20.0.0.0'],
+
     // Configuraciones específicas para error 515
     handleError515: true,
     error515RetryDelay: 1000, // 1 segundo para error 515
@@ -97,19 +98,19 @@ export function getWhatsAppConfig(section) {
 // Función para validar configuración
 export function validateConfig() {
   const errors = [];
-  
+
   if (whatsappConfig.connection.connectTimeoutMs < 10000) {
     errors.push('connectTimeoutMs debe ser al menos 10000ms');
   }
-  
+
   if (whatsappConfig.connection.keepAliveIntervalMs < 5000) {
     errors.push('keepAliveIntervalMs debe ser al menos 5000ms');
   }
-  
+
   if (whatsappConfig.rateLimit.maxMessagesPerMinute > 60) {
     errors.push('maxMessagesPerMinute no debe exceder 60');
   }
-  
+
   return {
     isValid: errors.length === 0,
     errors

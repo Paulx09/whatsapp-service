@@ -1,4 +1,4 @@
-import whatsappService from "../services/whatsapp.service.js";
+import whatsappService, { sendCampaignBatch as sendCampaignBatchService } from "../services/whatsapp.service.js";
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import path from 'path';
@@ -11,9 +11,9 @@ const __dirname = path.dirname(__filename);
 
 export async function sendMessage(req, res) {
   try {
-const { nombre, templateOption, telefono, fecha = null, hora = null, id_servicio} = req.body;
+    const { nombre, templateOption, telefono, fecha = null, hora = null, id_servicio } = req.body;
 
-      const result = await whatsappService.sendMessage({
+    const result = await whatsappService.sendMessage({
       nombre,
       templateOption,
       telefono,
@@ -31,7 +31,7 @@ const { nombre, templateOption, telefono, fecha = null, hora = null, id_servicio
     res.status(500).json({
       success: false,
       message: error.message,
-      abcd:error,
+      abcd: error,
       timestamp: new Date().toISOString(),
     });
   }
@@ -44,10 +44,10 @@ export async function sendMessageWithImageDashboard(req, res) {
     const image = req.file
       ? `${BASE_URL}/public/imagenes_dashboard/${req.file.filename}`
       : null;
-    
-      console.log('image',image)
-    
-      const result = await whatsappService.sendMessageImageDashboard({
+
+    console.log('image', image)
+
+    const result = await whatsappService.sendMessageImageDashboard({
       nombre,
       id_service,
       telefono,
@@ -214,10 +214,27 @@ export async function requestNewQr(req, res) {
     }
   } catch (error) {
     console.error('Error al solicitar nuevo QR:', error);
+
+    // Si error es un objeto con estructura de negocio {code, message}
+    if (error && error.code) {
+      const statusCodeMap = {
+        'CONNECTION_IN_PROGRESS': 400,
+        'QR_ACTIVE': 409,
+        'RATE_LIMITED': 429,
+        'SESSION_ERROR': 500
+      };
+
+      return res.status(statusCodeMap[error.code] || 400).json({
+        success: false,
+        code: error.code,
+        message: error.message || 'Error en la solicitud'
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: 'Error interno del servidor',
-      error: error.message,
+      error: error.message || error.toString(),
       timestamp: new Date().toISOString(),
     });
   }
@@ -360,7 +377,7 @@ export function resetAuth(req, res) {
         });
       } else {
         console.log(`Carpeta ${authPath} eliminada correctamente.`);
-        
+
         fs.mkdir(authPath, { recursive: true }, (mkdirErr) => {
           if (mkdirErr) {
             console.error(`Error creando la carpeta ${authPath}:`, mkdirErr);
@@ -629,6 +646,61 @@ export async function sendMessageReject(req, res) {
     });
   } catch (error) {
     console.error("Error en sendMessageReject:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      timestamp: new Date().toISOString(),
+    });
+  }
+}
+
+/**
+ * Envía una campaña en batch (para envíos masivos desde Laravel)
+ */
+export async function sendCampaignBatch(req, res) {
+  try {
+    const { campania_id, chunk_number, recipients, message, image_url, id_servicio } = req.body;
+
+    // Validaciones
+    if (!campania_id || !recipients || !Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Faltan campos requeridos o formato inválido",
+        required: ["campania_id", "recipients (array)", "message", "image_url"]
+      });
+    }
+
+    if (!message || !image_url) {
+      return res.status(400).json({
+        success: false,
+        message: "Se requiere mensaje e imagen para la campaña",
+      });
+    }
+
+    console.log(`[Campaña ${campania_id}] Chunk ${chunk_number}: Procesando ${recipients.length} destinatarios`);
+
+    // Procesar el batch
+    const result = await sendCampaignBatchService({
+      campania_id,
+      chunk_number,
+      recipients,
+      message,
+      image_url,
+      id_servicio
+    });
+
+    res.json({
+      success: true,
+      campania_id,
+      chunk_number,
+      successful: result.successful,
+      failed: result.failed,
+      results: result.results,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error(`Error en sendCampaignBatch:`, error);
     res.status(500).json({
       success: false,
       message: error.message,

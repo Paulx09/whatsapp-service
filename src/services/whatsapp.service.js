@@ -1,15 +1,18 @@
-import { makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys';
 import QRCode from 'qrcode';
-//import { getTemplate, getTemplateMessage } from '../templates.js';
 import { getTemplate } from '../templates.js';
 import logger from '../utils/logger.js';
 import { emitQrStatusUpdate } from '../app.js';
 import { getWhatsAppConfig } from '../config/whatsapp.config.js';
 import { chatbotFlow } from '../chatbot/chatbotFlow.js';
 import fs from 'fs';
+import { rm } from 'fs/promises';
 import path from 'path';
 import dotenv from 'dotenv';
 dotenv.config();
+
+const forceQrDelay = 0; // Delay forzado antes de generar QR (0ms por defecto)
+let config = getWhatsAppConfig();
 
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught Exception:', {
@@ -28,9 +31,6 @@ process.on('unhandledRejection', (reason, promise) => {
     promise: promise,
     timestamp: new Date().toISOString()
   });
-
-  // No cerrar el proceso, solo loggear el error
-  console.error('❌ Unhandled Rejection:', reason);
 });
 
 const connectionState = {
@@ -45,11 +45,12 @@ const connectionState = {
   reconnectTimer: null,
   isReconnecting: false,
   lastConnectionAttempt: 0,
-
+  me: null, // Información del usuario conectado (teléfono)
   conversations: new Map(), // key: userId, value: { step: number, context: any }
 };
 
-
+// ⚠️ FUNCIÓN DE CHATBOT DESHABILITADA - No usar en producción para evitar respuestas automáticas
+/*
 function handleIncomingMessage(userId, message) {
   let conv = connectionState.conversations.get(userId);
   const now = Date.now();
@@ -85,9 +86,9 @@ function handleIncomingMessage(userId, message) {
           text: "✅ Gracias por tu interés, un asesor se pondrá en contacto contigo."
         });
         connectionState.conversations.delete(userId);
-      }, 1500); 
+      }, 1500);
 
-      return; 
+      return;
     }
 
     conv.timeout = setTimeout(() => {
@@ -101,108 +102,109 @@ function handleIncomingMessage(userId, message) {
     return nextFlow.message;
   }
 
-  // 🚫 Si la opción no es válida
   connectionState.conversations.set(userId, conv);
   return `❌ Opción no válida.\n\n${currentStep.message}`;
 }
-
-
+*/
 
 export async function startWhatsAppBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+  logger.info("🚀 Iniciando Bot de WhatsApp...");
+  try {
+    // Si ya hay una sesión activa, limpiarla primero
+    if (connectionState.socket) {
+      await cleanupConnection();
+    }
 
-  const sock = makeWASocket({
-    printQRInTerminal: true,
-    auth: state,
-    mediaTimeoutMs: 60000,
-    connectTimeoutMs: 60000,
-    ws: {
-      timeout: 60000,
-      keepalive: true,
-      keepaliveInterval: 15000,
-    },
-  });
+    // Verificar si existe auth_info con credenciales
+    const authPath = path.resolve(process.cwd(), 'auth_info');
+    const hasAuthInfo = fs.existsSync(authPath) && fs.readdirSync(authPath).length > 0;
+    
+    if (hasAuthInfo) {
+      logger.info("📂 Credenciales encontradas en auth_info, intentando reconexión automática...");
+      emitQrStatusUpdate({
+        hasActiveQR: false,
+        isConnected: false,
+        connectionState: {
+          status: 'reconnecting',
+          message: 'Intentando reconectar con credenciales existentes...'
+        }
+      });
+    }
 
-  sock.ev.on('connection.update', (update) => {
-  const { connection, lastDisconnect } = update;
-  console.log("📡 Estado de conexión:", connection);
-
-  if (connection === 'open') {
-    console.log("✅ Bot conectado correctamente a WhatsApp");
-  } else if (connection === 'close') {
-    console.log("❌ Se cerró la conexión:", lastDisconnect?.error);
+    // Iniciar nueva sesión usando la lógica centralizada
+    connectionState.socket = await createNewSession();
+    logger.info("✅ WhatsApp Bot configurado y esperando conexión...");
+  } catch (error) {
+    logger.error("❌ Fallo al iniciar WhatsApp Bot:", { error: error.message });
+    console.error("❌ Fallo al iniciar WhatsApp Bot:", error.message);
   }
-});
-
-  connectionState.socket = sock;
-
-  // 🔹 Ahora sí registramos los eventos
-  sock.ev.on('messages.upsert', async ({ messages }) => {
-    const msg = messages[0];
-    
-    // Debug: Ver todos los mensajes que llegan
-    console.log('📩 Mensaje recibido:', {
-      de: msg.key.remoteJid,
-      esDeYo: msg.key.fromMe,
-      tipo: msg.message ? Object.keys(msg.message)[0] : 'sin tipo',
-      texto: msg.message?.conversation || msg.message?.extendedTextMessage?.text || 'sin texto'
-    });
-    
-    // Ignorar mensajes enviados por nosotros mismos
-    if (msg.key.fromMe) {
-      console.log('⏭️ Ignorando mensaje propio');
-      return;
-    }
-    
-    // Extraer texto del mensaje (puede venir en diferentes formatos)
-    const text = msg.message?.conversation || 
-                 msg.message?.extendedTextMessage?.text || 
-                 msg.message?.imageMessage?.caption ||
-                 null;
-    
-    if (!text) {
-      console.log('⚠️ Mensaje sin texto, ignorando');
-      return;
-    }
-
-    const userId = msg.key.remoteJid;
-
-    console.log('🤖 Procesando chatbot para:', userId, 'texto:', text);
-
-    const response = handleIncomingMessage(userId, text);
-
-    if (response) {
-      console.log('📤 Enviando respuesta:', response.substring(0, 50) + '...');
-      try {
-        await sock.sendMessage(userId, { text: response });
-        console.log('✅ Respuesta enviada correctamente');
-      } catch (error) {
-        console.error('❌ Error enviando respuesta:', error.message);
-      }
-    }
-  });
-
-
-  sock.ev.on('creds.update', saveCreds);
-
-  logger.info("✅ WhatsApp Bot iniciado y escuchando mensajes...");
 }
 
+// ✅ Función auxiliar para obtener el nombre legible del DisconnectReason
+function getDisconnectReasonName(statusCode) {
+  const reasons = {
+    [DisconnectReason.connectionClosed]: 'Connection Closed',
+    [DisconnectReason.connectionLost]: 'Connection Lost',
+    [DisconnectReason.connectionReplaced]: 'Connection Replaced',
+    [DisconnectReason.timedOut]: 'Timed Out',
+    [DisconnectReason.loggedOut]: 'Logged Out',
+    [DisconnectReason.badSession]: 'Bad Session',
+    [DisconnectReason.restartRequired]: 'Restart Required',
+    [DisconnectReason.multideviceMismatch]: 'Multidevice Mismatch',
+    [DisconnectReason.forbidden]: 'Forbidden',
+    [DisconnectReason.unavailableService]: 'Unavailable Service'
+  };
+  return reasons[statusCode] || `Unknown (${statusCode})`;
+}
+
+// Función para limpiar la carpeta auth_info cuando el usuario cierra sesión desde WhatsApp
+async function cleanupAuthInfo() {
+  try {
+    const authPath = path.resolve(process.cwd(), 'auth_info');
+    
+    if (fs.existsSync(authPath)) {
+      logger.info('🧹 Limpiando carpeta auth_info...');
+      // Eliminar todos los archivos dentro de auth_info
+      const files = fs.readdirSync(authPath);
+      for (const file of files) {
+        const filePath = path.join(authPath, file);
+        if (fs.statSync(filePath).isFile()) {
+          fs.unlinkSync(filePath);
+          logger.info('🗑️ Archivo de autenticación eliminado', { file });
+        }
+      }
+      logger.info('✅ Carpeta auth_info limpiada exitosamente');
+      return true;
+    } else {
+      logger.info('ℹ️ Carpeta auth_info no existe, nada que limpiar');
+    }
+    return false;
+  } catch (error) {
+    logger.error('❌ Error limpiando auth_info', { error: error.message, stack: error.stack });
+    return false;
+  }
+}
 
 // Función para limpiar completamente el estado
-async function cleanupConnection() {
+async function cleanupConnection(removeAuth = false) {
   try {
     if (connectionState.socket) {
       try {
-        // Remover todos los event listeners antes de cerrar
         if (connectionState.socket.ev) {
           connectionState.socket.ev.removeAllListeners();
         }
-
         await connectionState.socket.end();
         logger.info('Connection closed successfully');
       } catch (error) {
         logger.debug('Error closing connection', { error: error.message });
+      }
+    }
+
+    if (removeAuth) {
+      const authPath = path.resolve(process.cwd(), 'auth_info');
+      if (fs.existsSync(authPath)) {
+        logger.info('Removing invalid auth_info directory...');
+        await rm(authPath, { recursive: true, force: true });
       }
     }
   } catch (error) {
@@ -213,6 +215,7 @@ async function cleanupConnection() {
     connectionState.isConnecting = false;
     connectionState.connectionStatus = 'disconnected';
     connectionState.isReconnecting = false;
+    connectionState.me = null;
   }
 }
 
@@ -236,6 +239,7 @@ function getQRStatus() {
     hasActiveQR,
     qrData: qrInfo,
     isConnected: connectionState.connectionStatus === 'connected',
+    me: connectionState.me, // Incluir info de quién está conectado
     connectionState: {
       isConnecting: connectionState.isConnecting,
       hasSocket: !!connectionState.socket,
@@ -425,44 +429,50 @@ function handleStreamError(error, update) {
 // Función principal para crear nueva sesión
 async function createNewSession() {
   try {
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    logger.info(`Using WhatsApp version: ${version.join('.')}, isLatest: ${isLatest}`);
+
     const { state, saveCreds } = await useMultiFileAuthState('auth_info');
     const config = getWhatsAppConfig();
 
     const sock = makeWASocket({
+      version: version || [2, 3000, 1015901307],
       auth: state,
       printQRInTerminal: config.security?.printQRInTerminal || false,
-      connectTimeoutMs: config.stability?.connectionTimeout || config.connection?.connectTimeoutMs || 30000,
-      browser: [config.browser?.name || 'Chrome', config.browser?.version || '120.0.0.0', config.browser?.os || 'Windows'],
-      keepAliveIntervalMs: config.connection?.keepAliveIntervalMs || 60000,
-      markOnlineOnConnect: config.security?.markOnlineOnConnect !== false,
+      connectTimeoutMs: 60000,
+      browser: ['Ubuntu', 'Chrome', '110.0.5481.177'],
+      keepAliveIntervalMs: 30000,
+      markOnlineOnConnect: true,
       syncFullHistory: false,
-      retryRequestDelayMs: config.connection?.retryRequestDelayMs || 1000,
-      maxRetries: config.connection?.maxRetries || 5,
+      shouldSyncHistoryDevices: false,
+      receivedPendingNotifications: false,
+      retryRequestDelayMs: 2000,
+      maxRetries: 5,
       emitOwnEvents: false,
-      shouldIgnoreJid: (jid) => jid.includes('@broadcast'),
-      patchMessageBeforeSending: (msg) => {
-        if (msg.message) {
-          msg.messageTimestamp = Date.now();
-        }
-        return msg;
-      },
+      shouldIgnoreJid: (jid) => jid?.includes('@broadcast'),
       ws: {
-        timeout: config.stability?.networkTimeout || config.websocket?.timeout || 30000,
+        timeout: 60000,
         keepalive: true,
-        keepaliveInterval: config.websocket?.keepaliveInterval || 15000,
+        keepaliveInterval: 15000,
       }
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', () => {
+      logger.info('Credentials updated, saving...');
+      saveCreds();
+    });
 
     // Configurar event handlers para mejor manejo de conexión
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
       try {
-        logger.info('Connection update', {
+        const connectionDetail = {
           connection: update.connection,
-          lastDisconnect: update.lastDisconnect,
-          qr: update.qr ? 'present' : 'absent'
-        });
+          qr: update.qr ? 'present' : 'absent',
+          statusCode: update.lastDisconnect?.error?.output?.statusCode,
+          reason: update.lastDisconnect?.error?.message
+        };
+
+        logger.info('Connection update detailed', connectionDetail);
 
         // Manejar cambios de estado de conexión
         if (update.connection === 'connecting') {
@@ -476,7 +486,8 @@ async function createNewSession() {
           connectionState.qrData = null;
           connectionState.reconnectAttempts = 0;
           connectionState.isReconnecting = false;
-          logger.info('WhatsApp connected successfully');
+          connectionState.me = sock.user;
+          logger.info('✅ WhatsApp connected successfully!', { user: sock.user.id });
 
           try {
             emitQrStatusUpdate(getQRStatus());
@@ -484,19 +495,99 @@ async function createNewSession() {
             logger.error('Error emitting connection status', { error: emitError.message });
           }
         } else if (update.connection === 'close') {
+          const lastDisconnect = update.lastDisconnect;
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          
           connectionState.connectionStatus = 'disconnected';
           connectionState.isConnecting = false;
 
           logger.warn('Connection closed', {
             reason: update.lastDisconnect?.error?.message || 'unknown',
-            statusCode: update.lastDisconnect?.statusCode
+            statusCode: statusCode,
+            disconnectReason: getDisconnectReasonName(statusCode)
           });
 
-          // Manejar errores de stream específicamente
-          if (update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
+          // ✅ NUEVO: Detectar logout desde teléfono y limpiar auth_info
+          if (statusCode === DisconnectReason.loggedOut) {
+            logger.warn('⚠️ Usuario cerró sesión desde WhatsApp, limpiando auth_info...');
+            await cleanupAuthInfo();
+            
+            // Notificar al frontend sobre el logout
+            try {
+              emitQrStatusUpdate({
+                hasActiveQR: false,
+                isConnected: false,
+                connectionState: {
+                  status: 'logged_out',
+                  message: 'Sesión cerrada desde el teléfono. Credenciales eliminadas.',
+                  reason: 'user_logout'
+                },
+                lastUpdated: new Date().toISOString()
+              });
+            } catch (emitError) {
+              logger.error('Error emitting logout status', { error: emitError.message });
+            }
+          }
+          // ✅ NUEVO: Detectar sesión inválida/corrupta y limpiar auth_info
+          else if (statusCode === DisconnectReason.badSession) {
+            logger.warn('⚠️ Sesión inválida detectada, limpiando auth_info...');
+            await cleanupAuthInfo();
+            
+            try {
+              emitQrStatusUpdate({
+                hasActiveQR: false,
+                isConnected: false,
+                connectionState: {
+                  status: 'bad_session',
+                  message: 'Sesión inválida. Credenciales eliminadas.',
+                  reason: 'invalid_session'
+                },
+                lastUpdated: new Date().toISOString()
+              });
+            } catch (emitError) {
+              logger.error('Error emitting bad session status', { error: emitError.message });
+            }
+          }
+          // ✅ NUEVO: Detectar reemplazo de conexión (conectado desde otro lugar)
+          else if (statusCode === DisconnectReason.connectionReplaced) {
+            logger.warn('⚠️ Conexión reemplazada (conectado desde otro dispositivo)');
+            await cleanupAuthInfo();
+            
+            try {
+              emitQrStatusUpdate({
+                hasActiveQR: false,
+                isConnected: false,
+                connectionState: {
+                  status: 'connection_replaced',
+                  message: 'Conexión reemplazada desde otro dispositivo.',
+                  reason: 'replaced'
+                },
+                lastUpdated: new Date().toISOString()
+              });
+            } catch (emitError) {
+              logger.error('Error emitting replaced status', { error: emitError.message });
+            }
+          }
+          // Manejar errores de stream específicamente (código 515)
+          else if (statusCode === DisconnectReason.restartRequired ||
+            update.lastDisconnect?.error?.data?.attrs?.code === '515' ||
             update.lastDisconnect?.error?.message?.includes('Stream Errored') ||
             update.lastDisconnect?.error?.message?.includes('restart required')) {
+            logger.info('🔄 Reinicio requerido, intentando reconexión...');
             handleStreamError(update.lastDisconnect.error, update);
+          }
+          // ✅ NUEVO: Para otros tipos de desconexión, intentar reconectar si hay credenciales
+          else {
+            const authPath = path.resolve(process.cwd(), 'auth_info');
+            const hasAuthInfo = fs.existsSync(authPath) && fs.readdirSync(authPath).length > 0;
+            
+            if (hasAuthInfo) {
+              logger.info('📂 Credenciales disponibles, intentando reconexión automática...');
+              const config = getWhatsAppConfig();
+              if (config.stability?.autoReconnect !== false) {
+                attemptReconnect();
+              }
+            }
           }
 
           try {
@@ -515,6 +606,37 @@ async function createNewSession() {
         logger.error('Error handling connection update', { error: error.message, stack: error.stack });
       }
     });
+
+    // ⚠️ CHATBOT DESHABILITADO - No procesar mensajes entrantes en producción
+    /*
+    // Manejar mensajes entrantes (Chatbot)
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type !== 'notify') return;
+
+      const msg = messages[0];
+      if (msg.key.fromMe) return; // Ignorar mensajes propios
+
+      const text = msg.message?.conversation ||
+        msg.message?.extendedTextMessage?.text ||
+        msg.message?.imageMessage?.caption;
+
+      if (!text) return;
+
+      const userId = msg.key.remoteJid;
+      logger.info('🤖 Chatbot procesando mensaje', { userId, text });
+
+      const response = handleIncomingMessage(userId, text);
+
+      if (response) {
+        try {
+          await sock.sendMessage(userId, { text: response });
+          logger.info('✅ Respuesta de chatbot enviada');
+        } catch (error) {
+          logger.error('❌ Error enviando respuesta de chatbot', { error: error.message });
+        }
+      }
+    });
+    */
 
     return sock;
   } catch (error) {
@@ -672,8 +794,8 @@ async function getImageBase64(imgPath) {
 // API Pública
 export default {
   async requestQR(userId) {
-    
-    logger.info('Requesting new QR code', { userId });    
+
+    logger.info('Requesting new QR code', { userId });
     // GUARDÍAN: Si ya estamos conectando o reconectando, no hacer nada.
     if (connectionState.isConnecting || connectionState.isReconnecting) {
       logger.warn('Ignoring QR request: A connection attempt is already in progress.');
@@ -682,24 +804,10 @@ export default {
         message: 'Ya se está intentando conectar o reconectar. Por favor, espera unos segundos.'
       };
     }
-    
-    try {
-      if (connectionState.connectionStatus === 'connected') {
-        return {
-          success: false,
-          message: 'Ya estás conectado a WhatsApp. No es necesario escanear otro QR.',
-          isConnected: true
-        };
-      }
 
-      // Si hay un QR activo que aún no expiró, no generes otro
-      if (connectionState.qrData && Date.now() < connectionState.qrData.expiresAt) {
-        throw {
-          code: 'QR_ACTIVE',
-          message: 'Ya hay un QR activo',
-          expiresAt: connectionState.qrData.expiresAt
-        };
-      }
+    try {
+      // Ya no bloqueamos si hay un QR activo, permitimos reiniciar
+      // para mayor flexibilidad del usuario.
 
       // Rate limiting
       const now = Date.now();
@@ -718,7 +826,8 @@ export default {
       connectionState.connectionStatus = 'connecting';
 
       try {
-        await cleanupConnection();
+        // Al solicitar nuevo QR, SIEMPRE limpiamos credenciales antiguas
+        await cleanupConnection(true);
       } catch (cleanupError) {
         logger.error('Error during cleanup', { error: cleanupError.message });
       }
@@ -790,7 +899,7 @@ export default {
 
     const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
 
-    // 🔹 Obtiene la plantilla (objeto con text + image)
+    // Obtiene la plantilla (objeto con text + image)
     const plantilla = getTemplate(id_servicio, templateOption, { nombre });
 
     if (!plantilla || !plantilla.text) {
@@ -975,7 +1084,7 @@ export default {
       return { success: false, message: "Error al enviar imagen, no se envió mensaje" };
     }
   },
-  
+
   async sendMessageWithImage({ imageData, phone, caption }) {
     if (!connectionState.socket?.user) {
       throw new Error('No conectado a WhatsApp. Por favor, escanea el código QR primero.');
@@ -1310,9 +1419,9 @@ export default {
 
     // Importar las funciones de template
     const { getAcceptanceTemplate, getRejectionTemplate } = await import('../templates.js');
-    
+
     let finalMessage = message;
-    
+
     // Si se debe usar template, aplicar el correspondiente según el tipo
     if (useTemplate) {
       if (type === 'accept') {
@@ -1401,8 +1510,119 @@ export default {
   },
 
 
- 
+
 };
 
-//funcion para llegada de mensajes
- 
+/**
+ * Envía una campaña en batch con rate limiting
+ * @param {Object} params - Parámetros de la campaña
+ * @returns {Promise<Object>} Resultado del envío
+ */
+export async function sendCampaignBatch({ campania_id, chunk_number, recipients, message, image_url, id_servicio }) {
+  const results = {};
+  let successful = 0;
+  let failed = 0;
+
+  console.log(`\n🚀 [Campaña ${campania_id}] Iniciando chunk ${chunk_number} con ${recipients.length} destinatarios`);
+  
+  // Verificar conexión
+  if (!connectionState.socket || connectionState.connectionStatus !== 'connected') {
+    throw new Error('WhatsApp no está conectado. Por favor, escanea el código QR.');
+  }
+
+  // Descargar imagen una sola vez
+  let imageBuffer = null;
+  try {
+    console.log(`📥 Descargando imagen desde: ${image_url}`);
+    const imageResponse = await fetch(image_url);
+    
+    if (!imageResponse.ok) {
+      throw new Error(`Error al descargar imagen: ${imageResponse.status} ${imageResponse.statusText}`);
+    }
+    
+    imageBuffer = await imageResponse.arrayBuffer();
+    console.log(`✅ Imagen descargada: ${(imageBuffer.byteLength / 1024).toFixed(2)} KB`);
+  } catch (error) {
+    console.error(`❌ Error descargando imagen:`, error.message);
+    throw new Error(`No se pudo descargar la imagen de la campaña: ${error.message}`);
+  }
+
+  // Procesar cada destinatario con rate limiting
+  for (let i = 0; i < recipients.length; i++) {
+    const recipient = recipients[i];
+    const { id_modalservicio, nombre, telefono } = recipient;
+
+    try {
+      console.log(`\n📤 [${i + 1}/${recipients.length}] Enviando a ${nombre} (${telefono})...`);
+
+      // Formatear teléfono (asegurar que tenga @s.whatsapp.net)
+      const formattedPhone = telefono.includes('@') 
+        ? telefono 
+        : `${telefono}@s.whatsapp.net`;
+
+      // Enviar mensaje con imagen
+      const result = await connectionState.socket.sendMessage(formattedPhone, {
+        image: Buffer.from(imageBuffer),
+        caption: `Hola ${nombre}! 👋\n\n${message}`
+      });
+
+      results[id_modalservicio] = {
+        success: true,
+        messageId: result.key.id,
+        sentAt: new Date().toISOString()
+      };
+
+      successful++;
+      console.log(`✅ Enviado exitosamente a ${nombre}`);
+
+      // Rate limiting: Esperar entre 4-7 segundos entre mensajes
+      if (i < recipients.length - 1) {
+        const delay = Math.floor(Math.random() * 3000) + 4000; // 4-7 segundos
+        console.log(`⏳ Esperando ${(delay / 1000).toFixed(1)}s antes del siguiente envío...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+    } catch (error) {
+      console.error(`❌ Error enviando a ${nombre} (${telefono}):`, error.message);
+      
+      results[id_modalservicio] = {
+        success: false,
+        error: error.message || 'Error desconocido'
+      };
+
+      failed++;
+
+      // Si hay error de conexión, detener el batch
+      if (error.message.includes('disconnected') || error.message.includes('not-authorized')) {
+        console.error(`🛑 Error crítico de conexión. Deteniendo batch.`);
+        
+        // Marcar los restantes como fallidos
+        for (let j = i + 1; j < recipients.length; j++) {
+          results[recipients[j].id_modalservicio] = {
+            success: false,
+            error: 'Batch detenido por error de conexión'
+          };
+          failed++;
+        }
+        
+        break;
+      }
+
+      // Continuar con el siguiente destinatario
+      // Pequeña pausa adicional después de un error
+      if (i < recipients.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+  }
+
+  console.log(`\n📊 [Campaña ${campania_id}] Chunk ${chunk_number} completado:`);
+  console.log(`   ✅ Exitosos: ${successful}`);
+  console.log(`   ❌ Fallidos: ${failed}`);
+
+  return {
+    successful,
+    failed,
+    results
+  };
+}

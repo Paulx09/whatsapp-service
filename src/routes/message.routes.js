@@ -17,7 +17,6 @@ import {
   sendCampaignBatch
 } from '../controllers/message.controller.js';
 import {
-  validateSendMessage,
   validateSendImage,
   validateSendMessageAccept,
   validateSendMessageReject,

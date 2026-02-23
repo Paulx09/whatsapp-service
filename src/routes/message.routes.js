@@ -20,7 +20,8 @@ import {
   validateSendMessage,
   validateSendImage,
   validateSendMessageAccept,
-  validateSendMessageReject
+  validateSendMessageReject,
+  validateSendServiceTemplate
 } from '../validators/message.validator.js';
 import { 
   authenticateJWT, 
@@ -36,7 +37,7 @@ const router = Router();
 
 // ENDPOINTS PROTEGIDOS - Solo Laravel (con JWT o API Key)
 // Envío de mensajes individuales - Protegido
-router.post('/send-message', authenticateJWTorAPIKey, authorizeRoles(['marketing', 'administrador', 'system']), validateSendMessage, sendMessage);
+router.post('/send-message', authenticateJWTorAPIKey, authorizeRoles(['marketing', 'administrador', 'system']), validateSendServiceTemplate, sendMessage);
 
 // Envío de campañas masivas - CRÍTICO: Solo marketing/admin o Jobs
 router.post('/send-campaign-batch', authenticateJWTorAPIKey, authorizeRoles(['marketing', 'administrador', 'system']), sendCampaignBatch);

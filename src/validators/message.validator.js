@@ -1,5 +1,44 @@
 import { body, validationResult } from 'express-validator';
 
+// Validador para plantillas de servicios (modal landing)
+export const validateSendServiceTemplate = [
+  body('telefono')
+    .isString()
+    .notEmpty()
+    .withMessage('El número de teléfono es requerido')
+    .matches(/^[\d\s\-\+\(\)]+$/)
+    .withMessage('El número de teléfono debe contener solo dígitos, espacios, guiones, paréntesis y signo +'),
+  body('nombre')
+    .isString()
+    .notEmpty()
+    .withMessage('El nombre es requerido')
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage('El nombre debe tener entre 2 y 100 caracteres'),
+  body('templateOption')
+    .isInt({ min: 1, max: 3 })
+    .withMessage('La opción de plantilla debe ser 1, 2 o 3'),
+  body('id_servicio')
+    .isInt({ min: 1, max: 4 })
+    .withMessage('El ID de servicio debe ser entre 1 y 4'),
+  (req, res, next) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Errores de validación',
+        errors: errors.array().map(error => ({
+          field: error.path,
+          message: error.msg,
+          value: error.value
+        }))
+      });
+    }
+    next();
+  }
+];
+
+// Validador para citas de psicólogos
 export const validateSendMessage = [
   body('phone')
     .isString()

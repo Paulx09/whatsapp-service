@@ -900,7 +900,7 @@ export default {
     const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
 
     // Obtiene la plantilla (objeto con text + image)
-    const plantilla = getTemplate(id_servicio, templateOption, { nombre });
+    const plantilla = await getTemplate(id_servicio, templateOption, { nombre });
 
     if (!plantilla || !plantilla.text) {
       throw new Error("Plantilla de mensaje no válida");
@@ -1012,7 +1012,7 @@ export default {
     const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
 
     // Obtiene la plantilla
-    const plantilla = getTemplate(id_service, 1, { nombre, image });
+    const plantilla = await getTemplate(id_service, 1, { nombre, image });
 
     if (!plantilla || !plantilla.text) {
       throw new Error("Plantilla de mensaje no válida");

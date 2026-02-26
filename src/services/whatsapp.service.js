@@ -1575,9 +1575,9 @@ export async function sendCampaignBatch({ campania_id, chunk_number, recipients,
       successful++;
       console.log(`✅ Enviado exitosamente a ${nombre}`);
 
-      // Rate limiting: Esperar entre 40-50 segundos entre mensajes
+      // Rate limiting: Esperar entre 4-7 segundos entre mensajes
       if (i < recipients.length - 1) {
-        const delay = Math.floor(Math.random() * 10000) + 40000; // 40-50 segundos
+        const delay = Math.floor(Math.random() * 3000) + 4000; // 4-7 segundos
         console.log(`⏳ Esperando ${(delay / 1000).toFixed(1)}s antes del siguiente envío...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }

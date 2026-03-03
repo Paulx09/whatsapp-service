@@ -1553,6 +1553,38 @@ export async function sendCampaignBatch({ campania_id, chunk_number, recipients,
     const { id_modalservicio, nombre, telefono } = recipient;
 
     try {
+      // ⚡ VERIFICACIÓN INMEDIATA: Detectar si se perdió conexión o se solicitó reinicio
+      if (!connectionState.socket || connectionState.connectionStatus !== 'connected') {
+        console.log(`\n🛑 [PAUSA INMEDIATA] Conexión perdida o sesión reiniciada durante chunk`);
+        console.log(`   Estado actual: ${connectionState.connectionStatus}`);
+        console.log(`   Procesados antes de pausa: ${i}/${recipients.length}`);
+        
+        // Marcar los restantes como no procesados (incluido el actual)
+        for (let j = i; j < recipients.length; j++) {
+          results[recipients[j].id_modalservicio] = {
+            success: false,
+            error: 'WhatsApp desconectado - campaña pausada automáticamente'
+          };
+          failed++;
+        }
+        
+        console.log(`\n📊 [Campaña ${campania_id}] Chunk ${chunk_number} pausado por desconexión:`);
+        console.log(`   ✅ Exitosos: ${successful}`);
+        console.log(`   ❌ Fallidos (no procesados): ${failed}`);
+        
+        return {
+          success: true, // La operación fue exitosa (detectó y pausó correctamente)
+          campania_id,
+          chunk_number,
+          successful,
+          failed,
+          results,
+          paused: true, // ⚠️ FLAG ESPECIAL para que backend pause
+          pause_reason: 'connection_lost',
+          timestamp: new Date().toISOString()
+        };
+      }
+
       console.log(`\n📤 [${i + 1}/${recipients.length}] Enviando a ${nombre} (${telefono})...`);
 
       // Formatear teléfono (asegurar que tenga @s.whatsapp.net)
@@ -1621,8 +1653,13 @@ export async function sendCampaignBatch({ campania_id, chunk_number, recipients,
   console.log(`   ❌ Fallidos: ${failed}`);
 
   return {
+    success: true,
+    campania_id,
+    chunk_number,
     successful,
     failed,
-    results
+    results,
+    paused: false, // No se pausó durante el procesamiento
+    timestamp: new Date().toISOString()
   };
 }

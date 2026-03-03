@@ -53,10 +53,10 @@ router.post('/send-message-reject', validateSendMessageReject, sendMessageReject
 router.get('/sent-messages', authenticateJWT, authorizeRoles(['administrador', 'marketing']), getSentMessages);
 router.get('/qr-code', authenticateJWT, authorizeRoles(['administrador', 'marketing']), getQrCode);
 router.post('/send-image', authenticateJWT, authorizeRoles(['administrador', 'marketing']), validateSendImage, sendMessageWithImage);
-router.get('/status', authenticateJWT, getStatus);
-router.get('/qr-status', authenticateJWT, getQrStatus);
-router.get('/auth-status', authenticateJWT, checkAuthStatus);
-router.get('/reconnection-status', authenticateJWT, getReconnectionStatus);
+router.get('/status', authenticateJWTorAPIKey, getStatus);
+router.get('/qr-status', authenticateJWTorAPIKey, getQrStatus);
+router.get('/auth-status', authenticateJWTorAPIKey, checkAuthStatus);
+router.get('/reconnection-status', authenticateJWTorAPIKey, getReconnectionStatus);
 router.post('/qr-request', authenticateJWT, authorizeRoles(['administrador', 'marketing']), requestNewQr);
 router.post('/qr-expire', authenticateJWT, authorizeRoles(['administrador', 'marketing']), forceExpireQr);
 router.post('/auth/reset', authenticateJWT, authorizeRoles(['administrador']), resetAuth);

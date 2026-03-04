@@ -72,9 +72,11 @@ export async function sendMessageWithImageDashboard(req, res) {
 
 export function getStatus(req, res) {
   try {
+    const status = whatsappService.getQRStatus();
     res.json({
       success: true,
-      connected: whatsappService.isConnected(),
+      connected: status.isConnected,
+      connectedNumber: status.me?.user || null,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

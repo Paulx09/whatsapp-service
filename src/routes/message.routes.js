@@ -17,47 +17,61 @@ import {
   sendCampaignBatch
 } from '../controllers/message.controller.js';
 import {
-  validateSendMessage,
   validateSendImage,
   validateSendMessageAccept,
-  validateSendMessageReject
+  validateSendMessageReject,
+  validateSendServiceTemplate
 } from '../validators/message.validator.js';
-import { authenticateJWT, authorizeRole } from '../middlewares/auth.middleware.js';
+import { 
+  authenticateJWT, 
+  authorizeRole, 
+  authenticateJWTorAPIKey,
+  authorizeRoles 
+} from '../middlewares/auth.middleware.js';
 import { upload } from '../config/message.config.js';
 import { Router } from 'express';
 import { templateList } from '../templates.js'
 
 const router = Router();
 
-// router.post('/send-message', authenticateJWT, authorizeRole('admin'), validateSendMessage, sendMessage);
-router.post('/send-message', sendMessage);
-router.post('/send-message-image', upload.single("image"), sendMessageWithImageDashboard);
-router.post('/send-campaign-batch', sendCampaignBatch); // Nuevo endpoint para campañas masivas
+// ENDPOINTS PROTEGIDOS - Solo Laravel (con JWT o API Key)
+// Envío de mensajes individuales - Protegido
+router.post('/send-message', authenticateJWTorAPIKey, authorizeRoles(['marketing', 'administrador', 'system']), validateSendServiceTemplate, sendMessage);
 
+// Envío de campañas masivas - CRÍTICO: Solo marketing/admin o Jobs
+router.post('/send-campaign-batch', authenticateJWTorAPIKey, authorizeRoles(['marketing', 'administrador', 'system']), sendCampaignBatch);
+
+// Envío con imagen - Protegido
+router.post('/send-message-image', authenticateJWTorAPIKey, authorizeRoles(['marketing', 'administrador', 'system']), upload.single("image"), sendMessageWithImageDashboard);
+
+// ENDPOINTS PÚBLICOS (sin autenticación)
+// Mensajes de aceptación/rechazo desde frontend público
 router.post('/send-message-accept', validateSendMessageAccept, sendMessageAccept);
 router.post('/send-message-reject', validateSendMessageReject, sendMessageReject);
-router.get('/sent-messages', authenticateJWT, authorizeRole('admin'), getSentMessages);
-router.get('/qr-code', authenticateJWT, authorizeRole('admin'), getQrCode);
-router.post('/send-image', validateSendImage, sendMessageWithImage);
-router.get('/status', authenticateJWT, getStatus);
-router.get('/qr-status', authenticateJWT, getQrStatus);
-router.get('/auth-status', authenticateJWT, checkAuthStatus);
-router.get('/reconnection-status', authenticateJWT, getReconnectionStatus);
-router.post('/qr-request', authenticateJWT, authorizeRole('admin'), requestNewQr);
-router.post('/qr-expire', authenticateJWT, authorizeRole('admin'), forceExpireQr);
-router.post('/auth/reset', authenticateJWT, authorizeRole('admin'), resetAuth);
-router.post('/force-reconnect', authenticateJWT, authorizeRole('admin'), forceReconnect);
+
+// ENDPOINTS ADMINISTRATIVOS
+router.get('/sent-messages', authenticateJWT, authorizeRoles(['administrador', 'marketing']), getSentMessages);
+router.get('/qr-code', authenticateJWT, authorizeRoles(['administrador', 'marketing']), getQrCode);
+router.post('/send-image', authenticateJWT, authorizeRoles(['administrador', 'marketing']), validateSendImage, sendMessageWithImage);
+router.get('/status', authenticateJWTorAPIKey, getStatus);
+router.get('/qr-status', authenticateJWTorAPIKey, getQrStatus);
+router.get('/auth-status', authenticateJWTorAPIKey, checkAuthStatus);
+router.get('/reconnection-status', authenticateJWTorAPIKey, getReconnectionStatus);
+router.post('/qr-request', authenticateJWT, authorizeRoles(['administrador', 'marketing']), requestNewQr);
+router.post('/qr-expire', authenticateJWT, authorizeRoles(['administrador', 'marketing']), forceExpireQr);
+router.post('/auth/reset', authenticateJWT, authorizeRoles(['administrador']), resetAuth);
+router.post('/force-reconnect', authenticateJWT, authorizeRoles(['administrador', 'marketing']), forceReconnect);
 
 router.get('/templates', (req, res) => {
   res.json(templateList);
 });
 
 // Nuevas rutas para el frontend (Sin prefijo /whatsapp/ aquí porque se añade en app.js)
-router.post('/restart', authenticateJWT, authorizeRole('admin'), requestNewQr);
-router.post('/template', authenticateJWT, authorizeRole('admin'), upload.single('image'), (req, res) => {
+router.post('/restart', authenticateJWT, authorizeRoles(['administrador', 'marketing']), requestNewQr);
+router.post('/template', authenticateJWT, authorizeRoles(['administrador', 'marketing']), upload.single('image'), (req, res) => {
   res.json({ success: true, message: "Plantilla recibida", data: req.body, file: req.file });
 });
-router.post('/activate', authenticateJWT, authorizeRole('admin'), (req, res) => {
+router.post('/activate', authenticateJWT, authorizeRoles(['administrador', 'marketing']), (req, res) => {
   res.json({ success: true, message: "Campaña activada" });
 });
 

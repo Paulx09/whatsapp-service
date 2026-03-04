@@ -45,10 +45,12 @@ export async function authenticateJWT(req, res, next) {
       if (response.ok) {
         const data = await response.json();
         console.log('[DEBUG AUTH] Laravel backend validated user:', data.user?.name || data.name);
+        console.log('[DEBUG AUTH] User role from Laravel:', data.rol); // Log del rol
         req.user = {
           userId: data.user?.id || data.id,
           username: data.user?.name || data.name,
-          role: 'admin' // Acceso concedido si está autenticado en el principal
+          role: data.rol || 'user', // El rol viene directo como string en data.rol
+          roleData: data.empleado?.rol // Guardar datos completos del rol si existen
         };
         return next();
       } else {
@@ -74,5 +76,60 @@ export function authorizeRole(requiredRole) {
     } else {
       res.status(403).json({ success: false, message: 'Acceso prohibido' });
     }
+  };
+}
+
+// Middleware híbrido: JWT (preferido) o API Key (fallback para Jobs)
+export async function authenticateJWTorAPIKey(req, res, next) {
+  const authHeader = req.headers.authorization;
+  const apiKey = req.headers['x-api-key'];
+
+  // 1. Primera prioridad: JWT
+  if (authHeader) {
+    return authenticateJWT(req, res, next);
+  }
+
+  // 2. Fallback: API Key (para Jobs de Laravel)
+  if (apiKey) {
+    if (!process.env.API_KEY || apiKey !== process.env.API_KEY) {
+      return res.status(401).json({ success: false, message: 'API Key inválida' });
+    }
+    
+    // Marcar como request de servicio
+    req.user = {
+      userId: 0,
+      username: 'Sistema (Job)',
+      role: 'system',
+      isSystemJob: true
+    };
+    
+    console.log('[DEBUG AUTH] API Key validated - System Job');
+    return next();
+  }
+
+  // 3. Sin autenticación
+  return res.status(401).json({ 
+    success: false, 
+    message: 'Se requiere autenticación (JWT o API Key)' 
+  });
+}
+
+// Middleware para autorizar roles múltiples (marketing o administrador)
+export function authorizeRoles(allowedRoles = []) {
+  return (req, res, next) => {
+    // Permitir siempre a jobs del sistema
+    if (req.user?.isSystemJob) {
+      return next();
+    }
+
+    // Validar que el usuario tenga uno de los roles permitidos
+    if (req.user && allowedRoles.includes(req.user.role)) {
+      return next();
+    }
+
+    return res.status(403).json({ 
+      success: false, 
+      message: `Acceso prohibido. Se requiere uno de estos roles: ${allowedRoles.join(', ')}` 
+    });
   };
 }

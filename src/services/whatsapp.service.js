@@ -900,7 +900,7 @@ export default {
     const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
 
     // Obtiene la plantilla (objeto con text + image)
-    const plantilla = getTemplate(id_servicio, templateOption, { nombre });
+    const plantilla = await getTemplate(id_servicio, templateOption, { nombre });
 
     if (!plantilla || !plantilla.text) {
       throw new Error("Plantilla de mensaje no válida");
@@ -1012,7 +1012,7 @@ export default {
     const formattedPhone = `${cleanPhone}@s.whatsapp.net`;
 
     // Obtiene la plantilla
-    const plantilla = getTemplate(id_service, 1, { nombre, image });
+    const plantilla = await getTemplate(id_service, 1, { nombre, image });
 
     if (!plantilla || !plantilla.text) {
       throw new Error("Plantilla de mensaje no válida");
@@ -1553,6 +1553,38 @@ export async function sendCampaignBatch({ campania_id, chunk_number, recipients,
     const { id_modalservicio, nombre, telefono } = recipient;
 
     try {
+      // ⚡ VERIFICACIÓN INMEDIATA: Detectar si se perdió conexión o se solicitó reinicio
+      if (!connectionState.socket || connectionState.connectionStatus !== 'connected') {
+        console.log(`\n🛑 [PAUSA INMEDIATA] Conexión perdida o sesión reiniciada durante chunk`);
+        console.log(`   Estado actual: ${connectionState.connectionStatus}`);
+        console.log(`   Procesados antes de pausa: ${i}/${recipients.length}`);
+        
+        // Marcar los restantes como no procesados (incluido el actual)
+        for (let j = i; j < recipients.length; j++) {
+          results[recipients[j].id_modalservicio] = {
+            success: false,
+            error: 'WhatsApp desconectado - campaña pausada automáticamente'
+          };
+          failed++;
+        }
+        
+        console.log(`\n📊 [Campaña ${campania_id}] Chunk ${chunk_number} pausado por desconexión:`);
+        console.log(`   ✅ Exitosos: ${successful}`);
+        console.log(`   ❌ Fallidos (no procesados): ${failed}`);
+        
+        return {
+          success: true, // La operación fue exitosa (detectó y pausó correctamente)
+          campania_id,
+          chunk_number,
+          successful,
+          failed,
+          results,
+          paused: true, // ⚠️ FLAG ESPECIAL para que backend pause
+          pause_reason: 'connection_lost',
+          timestamp: new Date().toISOString()
+        };
+      }
+
       console.log(`\n📤 [${i + 1}/${recipients.length}] Enviando a ${nombre} (${telefono})...`);
 
       // Formatear teléfono (asegurar que tenga @s.whatsapp.net)
@@ -1575,9 +1607,9 @@ export async function sendCampaignBatch({ campania_id, chunk_number, recipients,
       successful++;
       console.log(`✅ Enviado exitosamente a ${nombre}`);
 
-      // Rate limiting: Esperar entre 4-7 segundos entre mensajes
+      // Rate limiting: Esperar entre 40-50 segundos entre mensajes (FASE 1)
       if (i < recipients.length - 1) {
-        const delay = Math.floor(Math.random() * 3000) + 4000; // 4-7 segundos
+        const delay = Math.floor(Math.random() * 10000) + 40000; // 40-50 segundos
         console.log(`⏳ Esperando ${(delay / 1000).toFixed(1)}s antes del siguiente envío...`);
         await new Promise(resolve => setTimeout(resolve, delay));
       }
@@ -1621,8 +1653,13 @@ export async function sendCampaignBatch({ campania_id, chunk_number, recipients,
   console.log(`   ❌ Fallidos: ${failed}`);
 
   return {
+    success: true,
+    campania_id,
+    chunk_number,
     successful,
     failed,
-    results
+    results,
+    paused: false, // No se pausó durante el procesamiento
+    timestamp: new Date().toISOString()
   };
 }

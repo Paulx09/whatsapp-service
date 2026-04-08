@@ -4,12 +4,19 @@ import { getTemplate } from '../templates.js';
 import logger from '../utils/logger.js';
 import { emitQrStatusUpdate } from '../app.js';
 import { getWhatsAppConfig } from '../config/whatsapp.config.js';
-import { chatbotFlow } from '../chatbot/chatbotFlow.js';
-import fs from 'fs';
-import { rm } from 'fs/promises';
-import path from 'path';
+import fs from 'node:fs';
+import { rm } from 'node:fs/promises';
+import path from 'node:path';
 import dotenv from 'dotenv';
 dotenv.config();
+
+const n8nConfig = {
+  webhookUrl: process.env.N8N_WEBHOOK_URL,
+  timeoutMs: Number.parseInt(process.env.N8N_TIMEOUT_MS || '12000', 10),
+  maxRetries: Math.max(1, Number.parseInt(process.env.N8N_MAX_RETRIES || '2', 10)),
+  retryDelayMs: Number.parseInt(process.env.N8N_RETRY_DELAY_MS || '1000', 10),
+  fallbackMessage: process.env.N8N_FALLBACK_MESSAGE || 'Disculpa, en este momento no puedo responder. Intenta nuevamente en unos minutos.'
+};
 
 const forceQrDelay = 0; // Delay forzado antes de generar QR (0ms por defecto)
 let config = getWhatsAppConfig();
@@ -48,6 +55,141 @@ const connectionState = {
   me: null, // Información del usuario conectado (teléfono)
   conversations: new Map(), // key: userId, value: { step: number, context: any }
 };
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractIncomingText(msg) {
+  const text =
+    msg?.message?.conversation ||
+    msg?.message?.extendedTextMessage?.text ||
+    msg?.message?.ephemeralMessage?.message?.conversation ||
+    msg?.message?.ephemeralMessage?.message?.extendedTextMessage?.text ||
+    '';
+
+  return typeof text === 'string' ? text.trim() : '';
+}
+
+function extractPhoneFromJid(jid) {
+  if (!jid || typeof jid !== 'string') {
+    return '';
+  }
+
+  const withoutDomain = jid.split('@')[0] || '';
+  return withoutDomain.replaceAll(/\D/g, '');
+}
+
+async function forwardMessageToN8N({ message, phone }) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= n8nConfig.maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), n8nConfig.timeoutMs);
+
+    try {
+      const response = await fetch(n8nConfig.webhookUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/plain, */*'
+        },
+        body: JSON.stringify({ message, phone }),
+        signal: controller.signal
+      });
+
+      const responseText = (await response.text()).trim();
+
+      if (!response.ok) {
+        throw new Error(`N8N_HTTP_${response.status}: ${responseText || 'Sin detalle de error'}`);
+      }
+
+      if (!responseText) {
+        throw new Error('N8N_EMPTY_RESPONSE');
+      }
+
+      return responseText;
+    } catch (error) {
+      lastError = error;
+      const isLastAttempt = attempt >= n8nConfig.maxRetries;
+
+      logger.warn('N8N forwarding attempt failed', {
+        attempt,
+        maxRetries: n8nConfig.maxRetries,
+        error: error.message
+      });
+
+      if (!isLastAttempt) {
+        await sleep(n8nConfig.retryDelayMs);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  throw lastError || new Error('N8N_REQUEST_FAILED');
+}
+
+async function processIncomingMessageWithN8N(sock, msg) {
+  if (!msg?.key || msg.key.fromMe) {
+    return;
+  }
+
+  const userJid = msg.key.remoteJid;
+  if (!userJid || userJid.endsWith('@g.us') || userJid.includes('@broadcast')) {
+    return;
+  }
+
+  const incomingText = extractIncomingText(msg);
+  if (!incomingText) {
+    logger.debug('Incoming message ignored (no text content)', { userJid });
+    return;
+  }
+
+  const phone = extractPhoneFromJid(userJid);
+  if (!phone) {
+    logger.warn('Incoming message ignored (could not parse phone)', { userJid });
+    return;
+  }
+
+  logger.info('Incoming WhatsApp message received', {
+    phone,
+    userJid,
+    messageLength: incomingText.length
+  });
+
+  try {
+    const n8nReply = await forwardMessageToN8N({ message: incomingText, phone });
+    const sent = await sock.sendMessage(userJid, { text: n8nReply });
+
+    logger.info('N8N reply sent to WhatsApp user', {
+      phone,
+      userJid,
+      messageId: sent?.key?.id
+    });
+  } catch (error) {
+    logger.error('Failed to process incoming WhatsApp message via N8N', {
+      phone,
+      userJid,
+      error: error.message
+    });
+
+    try {
+      const fallbackSent = await sock.sendMessage(userJid, { text: n8nConfig.fallbackMessage });
+      logger.info('Fallback message sent to WhatsApp user', {
+        phone,
+        userJid,
+        messageId: fallbackSent?.key?.id
+      });
+    } catch (fallbackError) {
+      logger.error('Failed sending fallback message to WhatsApp user', {
+        phone,
+        userJid,
+        error: fallbackError.message
+      });
+    }
+  }
+}
 
 // ⚠️ FUNCIÓN DE CHATBOT DESHABILITADA - No usar en producción para evitar respuestas automáticas
 /*
@@ -607,36 +749,22 @@ async function createNewSession() {
       }
     });
 
-    // ⚠️ CHATBOT DESHABILITADO - No procesar mensajes entrantes en producción
-    /*
-    // Manejar mensajes entrantes (Chatbot)
+    // Forward de mensajes entrantes hacia n8n (MVP)
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type !== 'notify') return;
+      if (type !== 'notify' || !Array.isArray(messages)) {
+        return;
+      }
 
-      const msg = messages[0];
-      if (msg.key.fromMe) return; // Ignorar mensajes propios
-
-      const text = msg.message?.conversation ||
-        msg.message?.extendedTextMessage?.text ||
-        msg.message?.imageMessage?.caption;
-
-      if (!text) return;
-
-      const userId = msg.key.remoteJid;
-      logger.info('🤖 Chatbot procesando mensaje', { userId, text });
-
-      const response = handleIncomingMessage(userId, text);
-
-      if (response) {
+      for (const msg of messages) {
         try {
-          await sock.sendMessage(userId, { text: response });
-          logger.info('✅ Respuesta de chatbot enviada');
+          await processIncomingMessageWithN8N(sock, msg);
         } catch (error) {
-          logger.error('❌ Error enviando respuesta de chatbot', { error: error.message });
+          logger.error('Unhandled error on messages.upsert processing', {
+            error: error.message
+          });
         }
       }
     });
-    */
 
     return sock;
   } catch (error) {

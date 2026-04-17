@@ -113,10 +113,13 @@ async function forwardMessageToN8N({ message, phone }) {
       lastError = error;
       const isLastAttempt = attempt >= n8nConfig.maxRetries;
 
+      // Extraer la causa real del fallo de red
+      const errorDetail = error.cause ? `${error.message} (${error.cause.message})` : error.message;
+
       logger.warn('N8N forwarding attempt failed', {
         attempt,
         maxRetries: n8nConfig.maxRetries,
-        error: error.message
+        error: errorDetail
       });
 
       if (!isLastAttempt) {
